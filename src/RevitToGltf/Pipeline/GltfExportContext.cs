@@ -92,21 +92,5 @@ namespace RevitToGltf.Pipeline
             if (percent > 100) return 100;
             return percent;
         }
-
-        /// <summary>逐档导出前清零几何统计计数器（输出目录/日志不动）</summary>
-        public void ResetGeometryCounters()
-        {
-            ElementCount = 0;
-            MeshElementCount = 0;
-            TriangleCount = 0;
-            TextureFileCount = 0;
-            SkippedElementCount = 0;
-            MaterialCount = 0;
-            AppearanceAssetCount = 0;
-            BitmapTextureCount = 0;
-            SharedMeshCount = 0;
-            InstanceCount = 0;
-            ExpandedTriangleCount = 0;
-        }
     }
 }

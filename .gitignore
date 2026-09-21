@@ -10,3 +10,4 @@ output/
 tools/vendor/
 *.fbx
 *.rvt
+*.zip

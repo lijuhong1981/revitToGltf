@@ -56,7 +56,6 @@
     <Compile Include="AppSettings.cs" />
     <Compile Include="Commands\App.cs" />
     <Compile Include="Commands\ExportGltfCommand.cs" />
-    <Compile Include="Commands\ExportLodTestCommand.cs" />
     <Compile Include="Commands\ExportProgressForm.cs" />
     <Compile Include="Extraction\GeometryExtractor.cs" />
     <Compile Include="Extraction\MaterialExtractor.cs" />

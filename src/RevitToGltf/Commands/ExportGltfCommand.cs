@@ -37,19 +37,20 @@ namespace RevitToGltf.Commands
             }
             Document doc = uiDocument.Document;
 
-            // 1. 单个弹窗完成全部设置：范围 + 文件名 + 输出目录 + DetailLevel + Triangulate
+            // 1. 单个弹窗完成全部设置：范围 + 文件名 + 输出目录 + DetailLevel + Triangulate + 格式(.gltf/.glb)
             ICollection<ElementId> scopeIds;
             string scopeName;
             string outputDirectory;
             string fileName;
             ViewDetailLevel detailLevel;
             double? triangulateLod;
+            bool binary;
             if (!SelectSettings(uiDocument, doc, out scopeIds, out scopeName,
-                out outputDirectory, out fileName, out detailLevel, out triangulateLod))
+                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary))
                 return Result.Cancelled;
             Directory.CreateDirectory(outputDirectory);
 
-            string gltfPath = Path.Combine(outputDirectory, fileName + ".gltf");
+            string gltfPath = Path.Combine(outputDirectory, fileName + (binary ? ".glb" : ".gltf"));
             string logPath = Path.Combine(outputDirectory, "gltf-export.log");
 
             var settings = new GeometryDetailSettings(fileName, detailLevel, triangulateLod) { LogProgressEvery = 2000 };
@@ -112,7 +113,7 @@ namespace RevitToGltf.Commands
                         var writeWatch = Stopwatch.StartNew();
                         try
                         {
-                            GltfWriter.Export(gltfPath, result, context);
+                            GltfWriter.Export(gltfPath, result, context, binary);
                         }
                         catch (OperationCanceledException)
                         {
@@ -131,14 +132,17 @@ namespace RevitToGltf.Commands
                         {
                             // 顶点数在写出过程中由写出器累计（图元数组写完即释放，无法再从 result 反查）
                             long vertexCount = context.VertexCount;
-                            long sizeBytes = FileSize(gltfPath) + FileSize(Path.ChangeExtension(gltfPath, ".bin"));
+                            long sizeBytes = FileSize(gltfPath)
+                                + (binary ? 0 : FileSize(Path.ChangeExtension(gltfPath, ".bin")));
                             double sizeMb = sizeBytes / 1048576.0;
 
+                            string formatTag = binary ? "glb" : "gltf";
+                            string sizeTag = binary ? "glb" : "gltf+bin";
                             summaryLine = string.Format(
-                                "[glTF] {0} | Detail={1} | Tri={2} | 元素 {3} | 含几何 {4} | 三角形 {5:N0} | 顶点 {6:N0} | gltf+bin {7:0.0}MB | 提取 {8:0.0}s | 写出 {9:0.0}s",
-                                fileName, detailLevel, TriText(triangulateLod),
+                                "[{0}] {1} | Detail={2} | Tri={3} | 元素 {4} | 含几何 {5} | 三角形 {6:N0} | 顶点 {7:N0} | {8} {9:0.0}MB | 提取 {10:0.0}s | 写出 {11:0.0}s",
+                                formatTag, fileName, detailLevel, TriText(triangulateLod),
                                 context.ElementCount, context.MeshElementCount, context.TriangleCount, vertexCount,
-                                sizeMb, extractSeconds, writeSeconds);
+                                sizeTag, sizeMb, extractSeconds, writeSeconds);
                             if (context.SharedMeshCount > 0)
                                 summaryLine += string.Format("\n实例化: 共享网格 {0} 个 / 实例 {1} 个, 展开三角形 {2:N0} → 去重 {3:N0} (省 {4:0.0}%)",
                                     context.SharedMeshCount, context.InstanceCount,
@@ -191,7 +195,7 @@ namespace RevitToGltf.Commands
             UIDocument uiDocument, Document doc,
             out ICollection<ElementId> scopeIds, out string scopeName,
             out string outputDirectory, out string fileName,
-            out ViewDetailLevel detailLevel, out double? triangulateLod)
+            out ViewDetailLevel detailLevel, out double? triangulateLod, out bool binary)
         {
             scopeIds = null;
             scopeName = null;
@@ -199,6 +203,7 @@ namespace RevitToGltf.Commands
             fileName = null;
             detailLevel = ViewDetailLevel.Fine;
             triangulateLod = null;
+            binary = false;
 
             string projectName = Path.GetFileNameWithoutExtension(doc.PathName);
             if (string.IsNullOrEmpty(projectName)) projectName = doc.Title;
@@ -210,6 +215,7 @@ namespace RevitToGltf.Commands
             ViewDetailLevel chosenDetail = ViewDetailLevel.Fine;
             double? chosenTri = null;    // null=使用 Revit 默认三角化（不勾选）
             string chosenFile = null;
+            bool chosenBinary = false;    // false=.gltf true=.glb
             bool nameEdited = false;      // 用户手工改过文件名后，滑动条不再自动改写
             bool suppressNameSync = false; // 程序化赋值时抑制 TextChanged 的"已编辑"标记
 
@@ -364,6 +370,21 @@ namespace RevitToGltf.Commands
                     }
                 };
 
+                // ---- 输出格式：.gltf（JSON + 外部 .bin + 贴图）或 .glb（单文件二进制） ----
+                var fmtLabel = new Label { Text = "格式:", Left = 200, Top = 346, Width = 60 };
+                var radioGltf = new RadioButton
+                {
+                    Text = ".gltf（JSON + 外部 .bin）", Left = 260, Top = 342, Width = 230, Height = 30, AutoSize = false,
+                    BackColor = System.Drawing.Color.Transparent, Checked = true
+                };
+                var radioGlb = new RadioButton
+                {
+                    Text = ".glb（单文件二进制）", Left = 500, Top = 342, Width = 200, Height = 30, AutoSize = false,
+                    BackColor = System.Drawing.Color.Transparent
+                };
+                radioGltf.CheckedChanged += (s, e) => { if (radioGltf.Checked) chosenBinary = false; };
+                radioGlb.CheckedChanged += (s, e) => { if (radioGlb.Checked) chosenBinary = true; };
+
                 var okButton = new Button { Text = "导出", Left = 828, Top = 504, Width = 120, Height = 42 };
                 var cancelButton = new Button
                 {
@@ -421,6 +442,9 @@ namespace RevitToGltf.Commands
                 form.Controls.Add(dirLabel);
                 form.Controls.Add(dirBox);
                 form.Controls.Add(browseButton);
+                form.Controls.Add(fmtLabel);
+                form.Controls.Add(radioGltf);
+                form.Controls.Add(radioGlb);
                 form.Controls.Add(detailLabel);
                 form.Controls.Add(radioCoarse);
                 form.Controls.Add(radioMedium);
@@ -464,6 +488,7 @@ namespace RevitToGltf.Commands
             fileName = chosenFile;
             detailLevel = chosenDetail;
             triangulateLod = chosenTri;
+            binary = chosenBinary;
             return true;
         }
 
