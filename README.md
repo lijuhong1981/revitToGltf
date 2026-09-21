@@ -23,6 +23,21 @@ Revit 文档
 | `Output/GltfWriter` | glTF 2.0 写出（POSITION/NORMAL/TEXCOORD_0，uint32 索引，构件名/元素ID写入 extras） |
 | `Pipeline/GltfExportContext` | 导出上下文（输出目录/日志/统计） |
 
+## 下载安装
+
+无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.1.0.zip`，解压得到：
+
+- `RevitToGltf.dll`
+- `RevitToGltf.addin`
+
+将两个文件一起复制到：
+
+```
+C:\ProgramData\Autodesk\Revit\Addins\2020\
+```
+
+重启 Revit 后，功能区出现 **模型转换 → glTF** 面板（含「导出 glTF」按钮）。
+
 ## 构建
 
 **依赖**：Revit 2020 + Visual Studio 2019（.NET 桌面开发工作负载）
@@ -38,7 +53,7 @@ Revit 文档
 msbuild revitToGltf.sln -p:Configuration=Release
 ```
 
-## 安装与部署
+## 从源码部署
 
 1. 将 `bin\Debug\RevitToGltf.dll`（或 Release）复制到：
    ```
