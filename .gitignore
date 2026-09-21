@@ -7,7 +7,7 @@ packages/
 
 # 对比页测试
 output/
-tools/vendor/
+tools/
 *.fbx
 *.rvt
 *.zip
