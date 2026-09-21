@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>RevitToGltf</Name>
+    <Assembly>RevitToGltf.dll</Assembly>
+    <AddInId>C797F6CB-83D3-4EEF-8358-F02C898C4FC5</AddInId>
+    <FullClassName>RevitToGltf.Commands.App</FullClassName>
+    <VendorId>PCIT</VendorId>
+    <VendorDescription>Revit模型导出glTF</VendorDescription>
+  </AddIn>
+</RevitAddIns>
