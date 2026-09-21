@@ -2,10 +2,6 @@
 
 Revit 模型导出 glTF 2.0 的 Revit 插件。保留**几何、材质与贴图**，输出可直接在 glTF 查看器 / three.js / Babylon.js 中加载。
 
-## 背景
-
-这是从 [revitTo3DTiles](https://github.com/lijuhong1981/revitTo3DTiles) 独立出来的 glTF 导出层：只负责 Revit → glTF（几何 + 材质 + 贴图），不做 BIM 语义 sidecar，也不做 3D Tiles 转换。既可作为独立插件使用，也作为后续精度调优的演进主场。
-
 ```
 Revit 文档
   └─ 几何 + 材质 + 贴图 → glTF 2.0（.gltf + .bin + textures/）
