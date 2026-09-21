@@ -222,7 +222,7 @@ namespace RevitToGltf.Commands
             using (var form = new System.Windows.Forms.Form())
             {
                 form.Text = "导出 glTF 设置";
-                form.ClientSize = new System.Drawing.Size(1100, 560);
+                form.ClientSize = new System.Drawing.Size(1100, 600);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
@@ -257,11 +257,11 @@ namespace RevitToGltf.Commands
                 Func<string> triSlug = () => chosenTri.HasValue
                     ? chosenTri.Value.ToString("0.00", CultureInfo.InvariantCulture) : "default";
                 Func<string> defaultName = () => projectName + "_" + DetailSlug(chosenDetail) + "_" + triSlug();
-                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 420, Width = 160 };
+                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 460, Width = 160 };
                 var nameBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 448,
+                    Top = 488,
                     Width = 920,
                     Height = 32,
                     Text = defaultName()
@@ -348,17 +348,17 @@ namespace RevitToGltf.Commands
                 };
 
                 // ---- 输出目录 ----
-                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 346, Width = 160 };
+                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 386, Width = 160 };
                 var dirBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 374,
+                    Top = 414,
                     Width = 920,
                     Height = 32,
                     Text = chosenDir,
                     ReadOnly = true
                 };
-                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 372, Width = 140, Height = 38 };
+                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 412, Width = 140, Height = 38 };
                 browseButton.Click += (s, e) =>
                 {
                     using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
@@ -371,26 +371,41 @@ namespace RevitToGltf.Commands
                 };
 
                 // ---- 输出格式：.gltf（JSON + 外部 .bin + 贴图）或 .glb（单文件二进制） ----
-                var fmtLabel = new Label { Text = "格式:", Left = 200, Top = 346, Width = 60 };
+                var fmtLabel = new Label { Text = "格式:", Left = 12, Top = 346, Width = 60 };
                 var radioGltf = new RadioButton
                 {
-                    Text = ".gltf（JSON + 外部 .bin）", Left = 260, Top = 342, Width = 230, Height = 30, AutoSize = false,
-                    BackColor = System.Drawing.Color.Transparent, Checked = true
+                    Text = ".gltf（JSON + 外部.bin）",
+                    AutoSize = true,
+                    BackColor = System.Drawing.Color.Transparent,
+                    Checked = true
                 };
                 var radioGlb = new RadioButton
                 {
-                    Text = ".glb（单文件二进制）", Left = 500, Top = 342, Width = 200, Height = 30, AutoSize = false,
+                    Text = ".glb（单文件二进制）",
+                    AutoSize = true,
                     BackColor = System.Drawing.Color.Transparent
                 };
                 radioGltf.CheckedChanged += (s, e) => { if (radioGltf.Checked) chosenBinary = false; };
                 radioGlb.CheckedChanged += (s, e) => { if (radioGlb.Checked) chosenBinary = true; };
+                // FlowLayoutPanel 按文字实际宽度排布单选，避免高 DPI 下固定宽度截断描述文字
+                var fmtPanel = new System.Windows.Forms.FlowLayoutPanel
+                {
+                    Left = 80,
+                    Top = 340,
+                    Width = 1000,
+                    Height = 34,
+                    FlowDirection = FlowDirection.LeftToRight,
+                    WrapContents = false
+                };
+                fmtPanel.Controls.Add(radioGltf);
+                fmtPanel.Controls.Add(radioGlb);
 
-                var okButton = new Button { Text = "导出", Left = 828, Top = 504, Width = 120, Height = 42 };
+                var okButton = new Button { Text = "导出", Left = 828, Top = 532, Width = 120, Height = 42 };
                 var cancelButton = new Button
                 {
                     Text = "取消",
                     Left = 960,
-                    Top = 504,
+                    Top = 532,
                     Width = 120,
                     Height = 42,
                     DialogResult = DialogResult.Cancel
@@ -443,8 +458,7 @@ namespace RevitToGltf.Commands
                 form.Controls.Add(dirBox);
                 form.Controls.Add(browseButton);
                 form.Controls.Add(fmtLabel);
-                form.Controls.Add(radioGltf);
-                form.Controls.Add(radioGlb);
+                form.Controls.Add(fmtPanel);
                 form.Controls.Add(detailLabel);
                 form.Controls.Add(radioCoarse);
                 form.Controls.Add(radioMedium);
