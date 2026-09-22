@@ -4,12 +4,12 @@ using Newtonsoft.Json;
 namespace RevitToGltf.Models
 {
     /// <summary>
-    /// 构件级元数据：BIM 语义信息，与 glTF 节点一一对应（Key = Revit UniqueId = glTF 节点 name）。
+    /// 构件级元数据：BIM 语义信息，与 glTF 节点一一对应（Key = Revit UniqueId = glTF 节点 extras.uniqueId）。
     /// 仅在勾选「导出元数据」时采集，由 MetadataWriter 序列化进 .metadata。
     /// </summary>
     public class ElementMetadata
     {
-        /// <summary>稳定唯一键（Revit UniqueId），与 glTF 节点 name 一致</summary>
+        /// <summary>稳定唯一键（Revit UniqueId），与 glTF 节点 extras.uniqueId 一致</summary>
         public string Key { get; set; }
 
         /// <summary>元素ID</summary>

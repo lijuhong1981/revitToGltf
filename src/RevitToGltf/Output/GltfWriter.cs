@@ -14,7 +14,7 @@ namespace RevitToGltf.Output
     /// glTF 2.0 写出器（外部 .bin + 外部贴图）。
     /// 顶点为世界坐标（已含嵌套族变换），故节点不写变换；
     /// 使用uint32索引规避65535顶点上限；含NORMAL/TEXCOORD_0与贴图引用。
-    /// 节点 name 保持 Revit UniqueId，构件名与元素ID写入 extras 供查看器展示。
+    /// 节点 name 用「构件名_元素ID」（可读且唯一），Revit UniqueId 写入 extras.uniqueId 供稳定对齐。
     ///
     /// 内存策略：.bin 直接流式写入文件而非先攒在 MemoryStream 里 —— 千万级三角形时
     /// MemoryStream 会与提取结果叠加一份完整副本，是 OutOfMemoryException 的主因。
@@ -94,10 +94,10 @@ namespace RevitToGltf.Output
                             materialIndexMap, textureIndexMap, ref vertexTotal);
                         gltfNodes.Add(new JObject
                         {
-                            // 节点名 = Revit UniqueId，作为稳定的匹配键
-                            ["name"] = node.Key,
+                            // 节点名 = 构件名_元素ID（可读且唯一）；稳定匹配键 UniqueId 写入 extras.uniqueId
+                            ["name"] = BuildNodeName(node.Name, node.ElementId),
                             ["mesh"] = meshIndex,
-                            ["extras"] = BuildExtras(node.ElementId, node.Name)
+                            ["extras"] = BuildExtras(node.Key, node.ElementId, node.Name)
                         });
                         writtenMeshes++;
                         context.Report(writtenMeshes * 100 / Math.Max(1, totalMeshes),
@@ -109,10 +109,10 @@ namespace RevitToGltf.Output
                     {
                         gltfNodes.Add(new JObject
                         {
-                            ["name"] = inst.Key,
+                            ["name"] = BuildNodeName(inst.Name, inst.ElementId),
                             ["mesh"] = sharedMeshIndex[inst.SharedMeshIndex],
                             ["matrix"] = new JArray(inst.Matrix),
-                            ["extras"] = BuildExtras(inst.ElementId, inst.Name)
+                            ["extras"] = BuildExtras(inst.Key, inst.ElementId, inst.Name)
                         });
                     }
 
@@ -241,13 +241,21 @@ namespace RevitToGltf.Output
             return meshes.Count - 1;
         }
 
-        /// <summary>节点 extras：元素ID + 构件名（供查看器展示）</summary>
-        private static JObject BuildExtras(int elementId, string name)
+        /// <summary>节点 extras：UniqueId（稳定匹配键）+ 元素ID + 构件名（供查看器展示）</summary>
+        private static JObject BuildExtras(string uniqueId, int elementId, string name)
         {
-            var extras = new JObject { ["elementId"] = elementId };
+            var extras = new JObject { ["uniqueId"] = uniqueId, ["elementId"] = elementId };
             if (!string.IsNullOrEmpty(name))
                 extras["name"] = name;
             return extras;
+        }
+
+        /// <summary>节点名：构件名_元素ID（可读且唯一）；空名时退化为元素ID</summary>
+        private static string BuildNodeName(string name, int elementId)
+        {
+            return string.IsNullOrEmpty(name)
+                ? elementId.ToString()
+                : name + "_" + elementId.ToString();
         }
 
         /// <summary>把已写入 .bin 的顶点数据从内存中放掉（换成空表，原数组交给 GC）</summary>
