@@ -61,6 +61,10 @@ namespace RevitToGltf.Models
         /// <summary>贴图相对路径（textures/xxx.png），null表示使用BaseColor</summary>
         public string TextureUri { get; set; }
 
+        /// <summary>贴图真实世界缩放（英尺/贴图重复一次）。UV 由 face.Project 的英尺制坐标除以此值得"贴图重复次数"。</summary>
+        public double TextureRealWorldScaleU { get; set; } = 1.0;
+        public double TextureRealWorldScaleV { get; set; } = 1.0;
+
         public int VertexCount { get { return Positions.Count / 3; } }
     }
 
@@ -110,6 +114,9 @@ namespace RevitToGltf.Models
 
         /// <summary>共享网格的实例（每个族实例一条）</summary>
         public List<RevitInstance> Instances { get; } = new List<RevitInstance>();
+
+        /// <summary>构件元数据（勾选导出元数据时按采集顺序填充，与节点/实例一一对应）</summary>
+        public List<ElementMetadata> Metadata { get; } = new List<ElementMetadata>();
 
         /// <summary>是否含任何有效几何</summary>
         public bool HasGeometry { get { return UniqueNodes.Count > 0 || SharedMeshes.Count > 0; } }

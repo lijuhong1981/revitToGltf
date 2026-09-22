@@ -12,6 +12,8 @@ namespace RevitToGltf.Extraction
     /// </summary>
     public static class MaterialExtractor
     {
+        private static int s_scaleDiagCount;
+
         public static void Apply(RevitPrimitive primitive, Material material, Document doc, GltfExportContext context)
         {
             context.MaterialCount++;
@@ -30,6 +32,14 @@ namespace RevitToGltf.Extraction
             if (!string.IsNullOrEmpty(textureUri))
             {
                 primitive.TextureUri = textureUri;
+                UV scale = TextureExtractor.GetRealWorldScale(material, doc);
+                primitive.TextureRealWorldScaleU = scale.U;
+                primitive.TextureRealWorldScaleV = scale.V;
+                if (s_scaleDiagCount < 5)
+                {
+                    s_scaleDiagCount++;
+                    context.Log(string.Format("贴图真实世界缩放[{0}]: U={1:F3}ft V={2:F3}ft", material.Name, scale.U, scale.V));
+                }
             }
 
             // 颜色：优先取外观渲染色，其次取图形颜色

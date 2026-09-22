@@ -28,6 +28,9 @@ namespace RevitToGltf.Extraction
         /// <summary>尺寸签名诊断日志计数（限制输出，避免刷屏）。</summary>
         private static int s_sigLogCount = 0;
 
+        /// <summary>UV 投影全零面诊断计数（限制输出，避免刷屏）。</summary>
+        private static int s_uvFailCount = 0;
+
         /// <summary>结构柱放置诊断是否已执行（每次导出仅一次）。</summary>
         private static bool s_placementDiagDone = false;
 
@@ -43,6 +46,7 @@ namespace RevitToGltf.Extraction
                 settings = new GeometryDetailSettings("model", ViewDetailLevel.Fine, null);
 
             var result = new ExtractResult();
+            s_uvFailCount = 0;
             var options = new Options
             {
                 ComputeReferences = false,
@@ -326,14 +330,17 @@ namespace RevitToGltf.Extraction
                     context.TriangleCount += prim.Indices.Count / 3;
             }
 
-            result.Instances.Add(new RevitInstance
+            var revInstance = new RevitInstance
             {
                 Key = instance.UniqueId,
                 Name = instance.Name,
                 ElementId = instance.Id.IntegerValue,
                 SharedMeshIndex = meshIndex,
                 Matrix = ToGlMatrix(transform)
-            });
+            };
+            result.Instances.Add(revInstance);
+            if (settings.ExportMetadata)
+                result.Metadata.Add(MetadataCollector.FromInstance(instance, revInstance.Matrix, context));
             context.MeshElementCount++;
             return true;
         }
@@ -368,6 +375,8 @@ namespace RevitToGltf.Extraction
             };
             node.Primitives.AddRange(valid);
             result.UniqueNodes.Add(node);
+            if (settings.ExportMetadata)
+                result.Metadata.Add(MetadataCollector.FromElement(element, context));
             context.MeshElementCount++;
             foreach (RevitPrimitive prim in node.Primitives)
                 context.TriangleCount += prim.Indices.Count / 3;
@@ -680,11 +689,15 @@ namespace RevitToGltf.Extraction
                 Mesh mesh = TriangulateFace(face, triangulateLod);
                 if (mesh == null || mesh.NumTriangles == 0) continue;
 
-                // 逐三角形投影到参数域并收集UV，统一求包围盒后归一化到[0,1]
+                // 逐三角形投影到面的参数域（英尺制），除以贴图真实世界缩放得到"贴图重复次数"。
+                // 不再归一化到[0,1]——那会让整张贴图拉伸铺满每个面；真实世界UV保留比例与平铺。
+                double scaleU = primitive.TextureRealWorldScaleU;
+                double scaleV = primitive.TextureRealWorldScaleV;
+                if (scaleU <= 1e-6) scaleU = 1.0;
+                if (scaleV <= 1e-6) scaleV = 1.0;
+
                 var triangles = new List<XYZ[]>();
                 var triangleUvs = new List<UV[]>();
-                double minU = double.MaxValue, maxU = double.MinValue;
-                double minV = double.MaxValue, maxV = double.MinValue;
 
                 for (int t = 0; t < mesh.NumTriangles; t++)
                 {
@@ -696,23 +709,34 @@ namespace RevitToGltf.Extraction
                         XYZ point = transform.OfPoint(triangle.get_Vertex(j));
                         points[j] = point;
                         UV uv = ProjectUV(face, point);
-                        uvs[j] = uv;
-                        if (uv.U < minU) minU = uv.U;
-                        if (uv.U > maxU) maxU = uv.U;
-                        if (uv.V < minV) minV = uv.V;
-                        if (uv.V > maxV) maxV = uv.V;
+                        uvs[j] = new UV(uv.U / scaleU, uv.V / scaleV);
                     }
                     triangles.Add(points);
                     triangleUvs.Add(uvs);
                 }
 
-                double rangeU = maxU - minU;
-                double rangeV = maxV - minV;
+                // 诊断：整面 UV 投影全为 0，说明 face.Project 对该面失效（返回 null/异常），
+                // 记录面类型与材质名以便定位原因（限流避免刷屏）。
+                if (s_uvFailCount < 8)
+                {
+                    bool allZero = true;
+                    for (int i = 0; i < triangleUvs.Count && allZero; i++)
+                        for (int j = 0; j < 3 && allZero; j++)
+                            if (Math.Abs(triangleUvs[i][j].U) > 1e-9 || Math.Abs(triangleUvs[i][j].V) > 1e-9)
+                                allZero = false;
+                    if (allZero)
+                    {
+                        s_uvFailCount++;
+                        context.Log(string.Format("UV投影全零面[{0}]: 面类型={1} 三角形={2} 顶点示例={3}",
+                            material != null ? material.Name : "null", face.GetType().Name, mesh.NumTriangles,
+                            mesh.Vertices.Count > 0 ? mesh.Vertices[0].ToString() : "n/a"));
+                    }
+                }
 
                 // 顶点焊接：同一面内相邻三角形共用边顶点，按量化位置去重，
-                // 把非索引展开的 3× 顶点冗余（2452 万三角形 → 7356 万顶点的主因）压回共享顶点。
-                // 仅按位置去重即可——同一面内法线一致、UV 按面统一归一化，共享点三者均一致；
-                // 跨面不合并（各面 UV 归一化与法线不同），天然保留硬边与纹理接缝。
+                // 把非索引展开的 3× 顶点冗余压回共享顶点。
+                // 仅按位置去重即可——同一面内法线一致、UV 由面参数域唯一确定，共享点三者均一致；
+                // 跨面不合并（各面 UV 与法线不同），天然保留硬边与纹理接缝。
                 var weld = new Dictionary<(int, int, int), uint>();
 
                 for (int t = 0; t < triangles.Count; t++)
@@ -723,11 +747,7 @@ namespace RevitToGltf.Extraction
 
                     for (int j = 0; j < 3; j++)
                     {
-                        UV uv = triangleUvs[t][j];
-                        var normalized = new UV(
-                            Math.Abs(rangeU) > 1e-12 ? (uv.U - minU) / rangeU : 0,
-                            Math.Abs(rangeV) > 1e-12 ? (uv.V - minV) / rangeV : 0);
-                        primitive.Indices.Add(GetOrAddVertex(primitive, weld, triangles[t][j], normal, normalized));
+                        primitive.Indices.Add(GetOrAddVertex(primitive, weld, triangles[t][j], normal, triangleUvs[t][j]));
                     }
                 }
             }
@@ -768,9 +788,47 @@ namespace RevitToGltf.Extraction
             }
             catch
             {
-                // 投影失败（点不在面上等）时退化为(0,0)
+                // 投影失败（点不在面上等）时走下方回退
             }
+
+            // 回退：平面直接用面局部基手工投影（不要求点严格落在面上，避免边界/数值导致 Project 失效）。
+            // 平面参数域满足 Evaluate(u,v) = Origin + u*XVector + v*YVector，故投影坐标即点相对原点的点积。
+            var planar = face as PlanarFace;
+            if (planar != null)
+            {
+                XYZ d = point - planar.Origin;
+                return new UV(d.DotProduct(planar.XVector), d.DotProduct(planar.YVector));
+            }
+
+            // 回退：旋转曲面（圆柱面/旋转面）手工投影。CylindricalFace/RevolvedFace 均未公开局部基，
+            // 改用 Axis+Origin 反解：v = 沿轴高度，u = 绕轴弧度角，弧长 = u*半径（英尺），
+            // 与平面 UV 同为英尺制可统一除以真实世界缩放。参考方向由 Axis 与固定世界轴叉积确定，
+            // 同一旋转面内各三角形一致，贴图可正确环绕。
+            var cyl = face as CylindricalFace;
+            if (cyl != null)
+                return ProjectRevolutionUV(point, cyl.Axis, cyl.Origin);
+            var rev = face as RevolvedFace;
+            if (rev != null)
+                return ProjectRevolutionUV(point, rev.Axis, rev.Origin);
+
             return new UV(0, 0);
+        }
+
+        /// <summary>旋转曲面（圆柱面/旋转面）近似 UV：u=绕轴弧长(英尺)，v=沿轴高度(英尺)</summary>
+        private static UV ProjectRevolutionUV(XYZ point, XYZ axis, XYZ origin)
+        {
+            XYZ rel = point - origin;
+            double v = rel.DotProduct(axis);
+            XYZ radial = rel - axis * v;
+            double radius = radial.GetLength();
+
+            XYZ refU = axis.CrossProduct(XYZ.BasisZ);
+            if (refU.GetLength() < 1e-9) refU = axis.CrossProduct(XYZ.BasisX);
+            refU = refU.Normalize();
+            XYZ refV = axis.CrossProduct(refU);
+
+            double angle = Math.Atan2(radial.DotProduct(refV), radial.DotProduct(refU));
+            return new UV(angle * radius, v);
         }
 
         /// <summary>顶点写入并按英尺→米换算</summary>
@@ -844,6 +902,9 @@ namespace RevitToGltf.Extraction
 
         /// <summary>是否启用族实例化（默认true；LOD测试需关闭以测量原始三角化量）</summary>
         public bool EnableInstancing { get; set; } = true;
+
+        /// <summary>是否采集构件元数据（勾选"导出元数据"时为 true）</summary>
+        public bool ExportMetadata { get; set; } = false;
 
         public GeometryDetailSettings(string tierName, ViewDetailLevel detailLevel, double? triangulateLevelOfDetail)
         {

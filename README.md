@@ -16,7 +16,9 @@ Revit 文档
 | `Extraction/GeometryExtractor` | 遍历文档元素提取三角网格，支持嵌套族变换展开，英尺→米换算，DetailLevel/Triangulate 精度控制 |
 | `Extraction/MaterialExtractor` | 材质颜色（渲染外观优先）与透明度 |
 | `Extraction/TextureExtractor` | 从渲染外观提取贴图图片并按内容哈希外置去重 |
+| `Extraction/MetadataCollector` | 构件 BIM 元数据采集（类别/族/类型/标高/实例参数） |
 | `Output/GltfWriter` | glTF 2.0 写出（POSITION/NORMAL/TEXCOORD_0，uint32 索引，构件名/元素ID写入 extras） |
+| `Output/MetadataWriter` | .metadata 写出（项目信息 + 构件清单，与 glTF 节点按 UniqueId 对齐） |
 | `Pipeline/GltfExportContext` | 导出上下文（输出目录/日志/统计） |
 
 ## 下载安装
@@ -72,6 +74,7 @@ msbuild revitToGltf.sln -p:Configuration=Release
    - 输出目录（默认桌面下 `<项目名>_gltf`）
    - DetailLevel（Coarse/Medium/Fine）与 Triangulate（0~1）滑动条
    - 输出格式（.gltf / .glb）
+   - 导出元数据（勾选后额外生成 `<文件名>.metadata`，含构件类别/族/类型/标高/实例参数）
 4. 点击「导出」，等待提取完成，弹出统计信息
 
 **输出结构**：
@@ -81,6 +84,7 @@ msbuild revitToGltf.sln -p:Configuration=Release
 ├── <项目名>_<detail>_<tri>.gltf   # glTF 入口，如 ljdd_fine_1.00.gltf（节点 extras 含构件名与元素ID）
 ├── <项目名>_<detail>_<tri>.bin    # 几何二进制（选 .glb 时内嵌进 .glb，不单独生成）
 ├── textures/                      # 外部贴图
+├── <项目名>_<detail>_<tri>.metadata  # 勾选「导出元数据」时生成（项目信息 + 构件 BIM 清单）
 └── gltf-export.log                # 导出日志
 ```
 
@@ -89,6 +93,7 @@ msbuild revitToGltf.sln -p:Configuration=Release
 - UV 为按面归一化（每个面的贴图铺满一次），未使用贴图的真实世界缩放
 - 贴图提取依赖 Revit 渲染外观中的图片路径，程序化纹理（渐变、噪波等）无图片可提取
 - 提取阶段为同步执行，超大模型（百万级构件）Revit 界面会暂时无响应
+- `<文件名>.metadata` 为缩进 JSON 且全量导出实例参数，数万构件时体积可达数十 MB
 
 ## License
 

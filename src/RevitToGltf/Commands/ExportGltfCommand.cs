@@ -20,7 +20,7 @@ namespace RevitToGltf.Commands
     /// 导出 glTF 命令：单个弹窗内完成全部设置——导出范围（全模型/视图可见/选中构件）、输出目录、
     /// DetailLevel（Coarse/Medium/Fine）与 Triangulate（三角化精度 0~1）滑动条。
     /// 按所选精度提取几何/材质/贴图，写出单个 glTF（.gltf + .bin + textures/）。
-    /// 不生成 meta.json、不调用 3D Tiles 转换器。
+    /// 可选勾选「导出元数据」生成同名 .metadata（项目信息 + 构件 BIM 信息），不调用 3D Tiles 转换器。
     /// 输出为 <根目录>\<项目名>_<detail>_<tri>.gltf（如 ljdd_fine_1.00.gltf），统计追加写入 gltf-export.log。
     /// </summary>
     [Transaction(TransactionMode.Manual)]
@@ -37,7 +37,7 @@ namespace RevitToGltf.Commands
             }
             Document doc = uiDocument.Document;
 
-            // 1. 单个弹窗完成全部设置：范围 + 文件名 + 输出目录 + DetailLevel + Triangulate + 格式(.gltf/.glb)
+            // 1. 单个弹窗完成全部设置：范围 + 文件名 + 输出目录 + DetailLevel + Triangulate + 格式(.gltf/.glb) + 元数据
             ICollection<ElementId> scopeIds;
             string scopeName;
             string outputDirectory;
@@ -45,15 +45,21 @@ namespace RevitToGltf.Commands
             ViewDetailLevel detailLevel;
             double? triangulateLod;
             bool binary;
+            bool exportMetadata;
             if (!SelectSettings(uiDocument, doc, out scopeIds, out scopeName,
-                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary))
+                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary, out exportMetadata))
                 return Result.Cancelled;
             Directory.CreateDirectory(outputDirectory);
 
             string gltfPath = Path.Combine(outputDirectory, fileName + (binary ? ".glb" : ".gltf"));
+            string metadataPath = Path.Combine(outputDirectory, fileName + ".metadata");
             string logPath = Path.Combine(outputDirectory, "gltf-export.log");
 
-            var settings = new GeometryDetailSettings(fileName, detailLevel, triangulateLod) { LogProgressEvery = 2000 };
+            var settings = new GeometryDetailSettings(fileName, detailLevel, triangulateLod)
+            {
+                LogProgressEvery = 2000,
+                ExportMetadata = exportMetadata
+            };
 
             string summaryLine = null;
             string failure = null;      // 非空表示失败，需弹窗提示
@@ -81,6 +87,8 @@ namespace RevitToGltf.Commands
                     context.Log(string.Format("范围: {0}", scopeName));
                     context.Log(string.Format("精度: Detail={0}, Tri={1}", detailLevel, TriText(triangulateLod)));
                     context.Log(string.Format("输出文件: {0}", gltfPath));
+                    if (exportMetadata)
+                        context.Log(string.Format("输出元数据: {0}", metadataPath));
 
                     var extractWatch = Stopwatch.StartNew();
                     ExtractResult result = null;
@@ -148,6 +156,22 @@ namespace RevitToGltf.Commands
                                     context.SharedMeshCount, context.InstanceCount,
                                     context.ExpandedTriangleCount, context.TriangleCount,
                                     (1 - (double)context.TriangleCount / Math.Max(1, context.ExpandedTriangleCount)) * 100);
+
+                            if (exportMetadata)
+                            {
+                                try
+                                {
+                                    int metaCount = MetadataWriter.Export(metadataPath, result, context, doc,
+                                        scopeName, detailLevel, triangulateLod, binary);
+                                    summaryLine += string.Format("\n元数据: {0} 条 → {1} ({2:0.0}KB)",
+                                        metaCount, Path.GetFileName(metadataPath), FileSize(metadataPath) / 1024.0);
+                                }
+                                catch (Exception ex)
+                                {
+                                    context.Log(string.Format("元数据写出失败({0}): {1}", Path.GetFileName(metadataPath), ex.Message));
+                                    summaryLine += "\n元数据: 写出失败（详见日志）";
+                                }
+                            }
                             context.Log(summaryLine);
                         }
                     }
@@ -195,7 +219,8 @@ namespace RevitToGltf.Commands
             UIDocument uiDocument, Document doc,
             out ICollection<ElementId> scopeIds, out string scopeName,
             out string outputDirectory, out string fileName,
-            out ViewDetailLevel detailLevel, out double? triangulateLod, out bool binary)
+            out ViewDetailLevel detailLevel, out double? triangulateLod, out bool binary,
+            out bool exportMetadata)
         {
             scopeIds = null;
             scopeName = null;
@@ -204,6 +229,7 @@ namespace RevitToGltf.Commands
             detailLevel = ViewDetailLevel.Fine;
             triangulateLod = null;
             binary = false;
+            exportMetadata = false;
 
             string projectName = Path.GetFileNameWithoutExtension(doc.PathName);
             if (string.IsNullOrEmpty(projectName)) projectName = doc.Title;
@@ -216,13 +242,14 @@ namespace RevitToGltf.Commands
             double? chosenTri = null;    // null=使用 Revit 默认三角化（不勾选）
             string chosenFile = null;
             bool chosenBinary = false;    // false=.gltf true=.glb
+            bool chosenMeta = false;       // 是否导出元数据 .metadata
             bool nameEdited = false;      // 用户手工改过文件名后，滑动条不再自动改写
             bool suppressNameSync = false; // 程序化赋值时抑制 TextChanged 的"已编辑"标记
 
             using (var form = new System.Windows.Forms.Form())
             {
                 form.Text = "导出 glTF 设置";
-                form.ClientSize = new System.Drawing.Size(1100, 600);
+                form.ClientSize = new System.Drawing.Size(1100, 652);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
@@ -257,11 +284,11 @@ namespace RevitToGltf.Commands
                 Func<string> triSlug = () => chosenTri.HasValue
                     ? chosenTri.Value.ToString("0.00", CultureInfo.InvariantCulture) : "default";
                 Func<string> defaultName = () => projectName + "_" + DetailSlug(chosenDetail) + "_" + triSlug();
-                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 460, Width = 160 };
+                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 512, Width = 160 };
                 var nameBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 488,
+                    Top = 540,
                     Width = 920,
                     Height = 32,
                     Text = defaultName()
@@ -348,17 +375,17 @@ namespace RevitToGltf.Commands
                 };
 
                 // ---- 输出目录 ----
-                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 386, Width = 160 };
+                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 438, Width = 160 };
                 var dirBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 414,
+                    Top = 466,
                     Width = 920,
                     Height = 32,
                     Text = chosenDir,
                     ReadOnly = true
                 };
-                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 412, Width = 140, Height = 38 };
+                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 464, Width = 140, Height = 38 };
                 browseButton.Click += (s, e) =>
                 {
                     using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
@@ -400,12 +427,24 @@ namespace RevitToGltf.Commands
                 fmtPanel.Controls.Add(radioGltf);
                 fmtPanel.Controls.Add(radioGlb);
 
-                var okButton = new Button { Text = "导出", Left = 828, Top = 532, Width = 120, Height = 42 };
+                // 导出元数据：独立一行，放在格式选择下方（不放同一 FlowLayoutPanel，避免与格式单选同行）
+                var exportMetaCheck = new CheckBox
+                {
+                    Text = "导出元数据（同名 .metadata）",
+                    Left = 12,
+                    Top = 388,
+                    AutoSize = true,
+                    Checked = false,
+                    BackColor = System.Drawing.Color.Transparent
+                };
+                exportMetaCheck.CheckedChanged += (s, e) => { chosenMeta = exportMetaCheck.Checked; };
+
+                var okButton = new Button { Text = "导出", Left = 828, Top = 584, Width = 120, Height = 42 };
                 var cancelButton = new Button
                 {
                     Text = "取消",
                     Left = 960,
-                    Top = 532,
+                    Top = 584,
                     Width = 120,
                     Height = 42,
                     DialogResult = DialogResult.Cancel
@@ -459,6 +498,7 @@ namespace RevitToGltf.Commands
                 form.Controls.Add(browseButton);
                 form.Controls.Add(fmtLabel);
                 form.Controls.Add(fmtPanel);
+                form.Controls.Add(exportMetaCheck);
                 form.Controls.Add(detailLabel);
                 form.Controls.Add(radioCoarse);
                 form.Controls.Add(radioMedium);
@@ -503,6 +543,7 @@ namespace RevitToGltf.Commands
             detailLevel = chosenDetail;
             triangulateLod = chosenTri;
             binary = chosenBinary;
+            exportMetadata = chosenMeta;
             return true;
         }
 

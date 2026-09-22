@@ -43,6 +43,7 @@ namespace RevitToGltf.Commands
                 LongDescription = "单个弹窗内设置导出范围（全模型/视图可见/选中构件）、输出目录、\n" +
                                   "DetailLevel（Coarse/Medium/Fine）与 Triangulate 精度（0~1，滑动条）。\n" +
                                   "提取几何/材质/贴图，写出 .gltf + .bin + textures/（文件名含精度参数）。\n" +
+                                  "可选勾选「导出元数据」生成同名 .metadata（构件 BIM 信息，含类别/族/类型/标高/实例参数）。\n" +
                                   "节点名保持 Revit UniqueId，构件名与元素ID写入 extras。"
             };
             panel.AddItem(exportButtonData);

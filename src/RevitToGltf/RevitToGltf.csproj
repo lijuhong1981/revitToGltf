@@ -59,9 +59,12 @@
     <Compile Include="Commands\ExportProgressForm.cs" />
     <Compile Include="Extraction\GeometryExtractor.cs" />
     <Compile Include="Extraction\MaterialExtractor.cs" />
+    <Compile Include="Extraction\MetadataCollector.cs" />
     <Compile Include="Extraction\TextureExtractor.cs" />
+    <Compile Include="Models\ElementMetadata.cs" />
     <Compile Include="Models\RevitMeshData.cs" />
     <Compile Include="Output\GltfWriter.cs" />
+    <Compile Include="Output\MetadataWriter.cs" />
     <Compile Include="Pipeline\GltfExportContext.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

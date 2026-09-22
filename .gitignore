@@ -5,8 +5,8 @@ obj/
 *.suo
 packages/
 
-# 对比页测试
-output/
+# 对比页测试（仅根目录导出的 gltf/bin；源码 src/RevitToGltf/Output/ 不受影响）
+/output/
 tools/
 *.fbx
 *.rvt
