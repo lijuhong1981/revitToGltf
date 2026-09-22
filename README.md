@@ -23,7 +23,7 @@ Revit 文档
 
 ## 下载安装
 
-无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.1.0.zip`，解压得到：
+无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.2.0.zip`，解压得到：
 
 - `RevitToGltf.dll`
 - `RevitToGltf.addin`
@@ -90,7 +90,7 @@ msbuild revitToGltf.sln -p:Configuration=Release
 
 ## 已知限制
 
-- UV 为按面归一化（每个面的贴图铺满一次），未使用贴图的真实世界缩放
+- 贴图按真实世界尺寸平铺（读取渲染外观的 texture_RealWorldScaleX/Y）；未记录该值的贴图回退为每 1 英尺重复一次
 - 贴图提取依赖 Revit 渲染外观中的图片路径，程序化纹理（渐变、噪波等）无图片可提取
 - 提取阶段为同步执行，超大模型（百万级构件）Revit 界面会暂时无响应
 - `<文件名>.metadata` 为缩进 JSON 且全量导出实例参数，数万构件时体积可达数十 MB
