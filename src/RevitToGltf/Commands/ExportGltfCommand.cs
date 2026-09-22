@@ -212,7 +212,6 @@ namespace RevitToGltf.Commands
             if (dialog.Show() == TaskDialogResult.CommandLink1)
                 Process.Start("explorer.exe", outputDirectory);
 
-            AppSettings.SaveLastOutputDirectory(outputDirectory);
             return Result.Succeeded;
         }
 
@@ -239,16 +238,22 @@ namespace RevitToGltf.Commands
             string projectName = Path.GetFileNameWithoutExtension(doc.PathName);
             if (string.IsNullOrEmpty(projectName)) projectName = doc.Title;
 
-            string chosenDir = AppSettings.LoadLastOutputDirectory()
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), projectName + "_gltf");
+            AppSettings.Settings saved = AppSettings.Load();
 
-            int scopeChoice = 1; // 0=全模型 1=视图可见 2=选中构件
-            ViewDetailLevel chosenDetail = ViewDetailLevel.Fine;
-            double? chosenTri = null;    // null=使用 Revit 默认三角化（不勾选）
+            string chosenDir = (!string.IsNullOrWhiteSpace(saved.LastOutputDirectory) && Directory.Exists(saved.LastOutputDirectory))
+                ? saved.LastOutputDirectory
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), projectName + "_gltf");
+
+            int scopeChoice = saved.Scope; // 0=全模型 1=视图可见 2=选中构件
+            if (scopeChoice < 0 || scopeChoice > 2) scopeChoice = 1;
+            ViewDetailLevel chosenDetail = ParseDetail(saved.DetailLevel);
+            double? chosenTri = saved.UseCustomTriangulate
+                ? (double?)Math.Min(1.0, Math.Max(0.0, saved.TriangulateLod))
+                : null;    // null=使用 Revit 默认三角化（不勾选）
             string chosenFile = null;
-            bool chosenBinary = false;    // false=.gltf true=.glb
-            bool chosenMeta = false;       // 是否导出元数据 .metadata
-            bool chosenSeparateTex = true; // 贴图是否分离到 textures/（默认勾选）
+            bool chosenBinary = saved.Binary;    // false=.gltf true=.glb
+            bool chosenMeta = saved.ExportMetadata;       // 是否导出元数据 .metadata
+            bool chosenSeparateTex = saved.SeparateTextures; // 贴图是否分离到 textures/（默认勾选）
             bool nameEdited = false;      // 用户手工改过文件名后，滑动条不再自动改写
             bool suppressNameSync = false; // 程序化赋值时抑制 TextChanged 的"已编辑"标记
 
@@ -269,16 +274,18 @@ namespace RevitToGltf.Commands
                 var radioFull = new RadioButton
                 {
                     Text = "全模型（最慢）", Left = 25, Top = 58, Width = 280, Height = RadioHeight, AutoSize = false,
+                    Checked = (scopeChoice == 0),
                     BackColor = System.Drawing.Color.Transparent
                 };
                 var radioView = new RadioButton
                 {
-                    Text = "当前视图可见（推荐）", Left = 325, Top = 58, Width = 340, Height = RadioHeight, AutoSize = false, Checked = true,
+                    Text = "当前视图可见（推荐）", Left = 325, Top = 58, Width = 340, Height = RadioHeight, AutoSize = false, Checked = (scopeChoice == 1),
                     BackColor = System.Drawing.Color.Transparent
                 };
                 var radioSel = new RadioButton
                 {
                     Text = "仅选中构件（最快）", Left = 690, Top = 58, Width = 380, Height = RadioHeight, AutoSize = false,
+                    Checked = (scopeChoice == 2),
                     BackColor = System.Drawing.Color.Transparent
                 };
                 scopeGroup.Controls.Add(radioFull);
@@ -316,16 +323,18 @@ namespace RevitToGltf.Commands
                 var radioCoarse = new RadioButton
                 {
                     Text = "Coarse（最粗）", Left = 12, Top = 180, Width = 230, Height = RadioHeight, AutoSize = false,
+                    Checked = (chosenDetail == ViewDetailLevel.Coarse),
                     BackColor = System.Drawing.Color.Transparent
                 };
                 var radioMedium = new RadioButton
                 {
                     Text = "Medium（中等）", Left = 262, Top = 180, Width = 230, Height = RadioHeight, AutoSize = false,
+                    Checked = (chosenDetail == ViewDetailLevel.Medium),
                     BackColor = System.Drawing.Color.Transparent
                 };
                 var radioFine = new RadioButton
                 {
-                    Text = "Fine（最细）", Left = 512, Top = 180, Width = 230, Height = RadioHeight, AutoSize = false, Checked = true,
+                    Text = "Fine（最细）", Left = 512, Top = 180, Width = 230, Height = RadioHeight, AutoSize = false, Checked = (chosenDetail == ViewDetailLevel.Fine),
                     BackColor = System.Drawing.Color.Transparent
                 };
                 radioCoarse.CheckedChanged += (s, e) => { if (radioCoarse.Checked) { chosenDetail = ViewDetailLevel.Coarse; syncName(); } };
@@ -341,7 +350,7 @@ namespace RevitToGltf.Commands
                     Top = 248,
                     Width = 880,
                     AutoSize = true,
-                    Checked = false
+                    Checked = chosenTri.HasValue
                 };
                 var triTrack = new TrackBar
                 {
@@ -353,11 +362,11 @@ namespace RevitToGltf.Commands
                     TickFrequency = 10,
                     SmallChange = 1,
                     LargeChange = 10,
-                    Value = 100,
+                    Value = chosenTri.HasValue ? (int)Math.Round(chosenTri.Value * 100) : 100,
                     TickStyle = TickStyle.None,
-                    Enabled = false
+                    Enabled = chosenTri.HasValue
                 };
-                var triValue = new Label { Text = "default", Left = 908, Top = 286, Width = 180 };
+                var triValue = new Label { Text = TriText(chosenTri), Left = 908, Top = 286, Width = 180 };
                 useTriCheck.CheckedChanged += (s, e) =>
                 {
                     triTrack.Enabled = useTriCheck.Checked;
@@ -410,13 +419,14 @@ namespace RevitToGltf.Commands
                     Text = ".gltf（JSON + 外部.bin）",
                     AutoSize = true,
                     BackColor = System.Drawing.Color.Transparent,
-                    Checked = true
+                    Checked = !chosenBinary
                 };
                 var radioGlb = new RadioButton
                 {
                     Text = ".glb（单文件二进制）",
                     AutoSize = true,
-                    BackColor = System.Drawing.Color.Transparent
+                    BackColor = System.Drawing.Color.Transparent,
+                    Checked = chosenBinary
                 };
                 radioGltf.CheckedChanged += (s, e) => { if (radioGltf.Checked) chosenBinary = false; };
                 radioGlb.CheckedChanged += (s, e) => { if (radioGlb.Checked) chosenBinary = true; };
@@ -440,7 +450,7 @@ namespace RevitToGltf.Commands
                     Left = 12,
                     Top = 388,
                     AutoSize = true,
-                    Checked = true,
+                    Checked = chosenSeparateTex,
                     BackColor = System.Drawing.Color.Transparent
                 };
                 separateTexCheck.CheckedChanged += (s, e) => { chosenSeparateTex = separateTexCheck.Checked; };
@@ -452,7 +462,7 @@ namespace RevitToGltf.Commands
                     Left = 12,
                     Top = 424,
                     AutoSize = true,
-                    Checked = false,
+                    Checked = chosenMeta,
                     BackColor = System.Drawing.Color.Transparent
                 };
                 exportMetaCheck.CheckedChanged += (s, e) => { chosenMeta = exportMetaCheck.Checked; };
@@ -504,6 +514,17 @@ namespace RevitToGltf.Commands
 
                     chosenDir = dirBox.Text;
                     chosenFile = candidate;
+                    AppSettings.Save(new AppSettings.Settings
+                    {
+                        LastOutputDirectory = chosenDir,
+                        Scope = scopeChoice,
+                        DetailLevel = DetailSlug(chosenDetail),
+                        UseCustomTriangulate = chosenTri.HasValue,
+                        TriangulateLod = chosenTri ?? 1.0,
+                        Binary = chosenBinary,
+                        ExportMetadata = chosenMeta,
+                        SeparateTextures = chosenSeparateTex
+                    });
                     form.DialogResult = DialogResult.OK;
                     form.Close();
                 };
@@ -573,6 +594,14 @@ namespace RevitToGltf.Commands
             if (detail == ViewDetailLevel.Fine) return "fine";
             if (detail == ViewDetailLevel.Medium) return "medium";
             return "coarse";
+        }
+
+        /// <summary>持久化字符串 → ViewDetailLevel（非法值回退 Fine）</summary>
+        private static ViewDetailLevel ParseDetail(string slug)
+        {
+            if (slug == "coarse") return ViewDetailLevel.Coarse;
+            if (slug == "medium") return ViewDetailLevel.Medium;
+            return ViewDetailLevel.Fine;
         }
 
         /// <summary>三角化精度显示文本（null=Revit 默认）</summary>
