@@ -17,13 +17,13 @@ Revit 文档
 | `Extraction/MaterialExtractor` | 材质颜色（渲染外观优先）与透明度 |
 | `Extraction/TextureExtractor` | 从渲染外观提取贴图图片并按内容哈希外置去重 |
 | `Extraction/MetadataCollector` | 构件 BIM 元数据采集（类别/族/类型/标高/实例参数） |
-| `Output/GltfWriter` | glTF 2.0 写出（POSITION/NORMAL/TEXCOORD_0，uint32 索引，构件名/元素ID写入 extras） |
-| `Output/MetadataWriter` | .metadata 写出（项目信息 + 构件清单，与 glTF 节点按 UniqueId 对齐） |
+| `Output/GltfWriter` | glTF 2.0 写出（POSITION/NORMAL/TEXCOORD_0，uint32 索引，节点名=构件名_元素ID，构件名/元素ID/UniqueId 写入 extras） |
+| `Output/MetadataWriter` | .metadata 写出（项目信息 + 构件清单，与 glTF 节点按 UniqueId（extras.uniqueId）对齐） |
 | `Pipeline/GltfExportContext` | 导出上下文（输出目录/日志/统计） |
 
 ## 下载安装
 
-无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.4.0.zip`，解压得到：
+无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.4.1.zip`，解压得到：
 
 - `RevitToGltf.dll`
 - `RevitToGltf.addin`
@@ -84,7 +84,7 @@ msbuild revitToGltf.sln -p:Configuration=Release
 
 ```
 <项目名>_gltf/
-├── <项目名>_<detail>_<tri>.gltf   # glTF 入口，如 ljdd_fine_1.00.gltf（节点 extras 含构件名与元素ID）
+├── <项目名>_<detail>_<tri>.gltf   # glTF 入口，如 ljdd_fine_1.00.gltf（节点名=构件名_元素ID，extras 含构件名/元素ID/UniqueId）
 ├── <项目名>_<detail>_<tri>.bin    # 几何二进制（选 .glb 时内嵌进 .glb，不单独生成）
 ├── textures/                      # 外部贴图（取消「贴图分离」时不生成，贴图内嵌进 .bin/.glb）
 ├── <项目名>_<detail>_<tri>.metadata  # 勾选「导出元数据」时生成（项目信息 + 构件 BIM 清单）
