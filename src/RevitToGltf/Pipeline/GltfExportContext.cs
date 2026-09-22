@@ -21,6 +21,9 @@ namespace RevitToGltf.Pipeline
         public int AppearanceAssetCount { get; set; }
         public int BitmapTextureCount { get; set; }
 
+        /// <summary>贴图是否分离到 textures/ 目录（默认 true）。false = 内嵌进 .bin/.glb</summary>
+        public bool SeparateTextures { get; set; } = true;
+
         /// <summary>实例化统计：共享网格个数</summary>
         public int SharedMeshCount { get; set; }
 

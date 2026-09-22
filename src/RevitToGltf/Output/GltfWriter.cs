@@ -32,7 +32,11 @@ namespace RevitToGltf.Output
 
         public static void Export(string gltfPath, ExtractResult result, GltfExportContext context, bool asGlb)
         {
-            string binPath = Path.ChangeExtension(gltfPath, ".bin");
+            // .glb 的中间二进制写临时文件：.glb 完成后会删除它，若与同名 .gltf 共用一个 .bin
+            // 会误删 .gltf 需要的 .bin（先导 .gltf 再导同名 .glb 时，.gltf 就缺 .bin 了）。
+            string binPath = asGlb
+                ? Path.Combine(Path.GetTempPath(), "revitToGltf-" + Guid.NewGuid().ToString("N") + ".bin")
+                : Path.ChangeExtension(gltfPath, ".bin");
 
             var bufferViews = new JArray();
             var accessors = new JArray();
@@ -125,7 +129,27 @@ namespace RevitToGltf.Output
 
             context.VertexCount = vertexTotal;
 
-            // 全部节点挂在场景根下（层级由外部携带，glTF保持扁平）
+            // Z-up → Y-up：glTF 2.0 规定 +Y 朝上，Revit 为 Z-up，故新增一个根节点做 -90°(绕X轴) 旋转，
+            // 所有构件节点挂其下。顶点与实例矩阵仍保持原 Z-up 世界坐标不变，由根节点统一翻转。
+            // 旋转矩阵为 proper rotation(det=+1)，法线与三角形绕向无需额外处理。
+            var rootNode = new JObject
+            {
+                ["name"] = "RevitToGltf_Root_YUp",
+                ["matrix"] = new JArray(new double[]
+                {
+                    1, 0,  0, 0,   // 列0：原 +X → 新 +X
+                    0, 0, -1, 0,   // 列1：原 +Y → 新 -Z
+                    0, 1,  0, 0,   // 列2：原 +Z → 新 +Y
+                    0, 0,  0, 1
+                }),
+                ["children"] = new JArray(Enumerable.Range(1, gltfNodes.Count))
+            };
+
+            var nodes = new JArray();
+            nodes.Add(rootNode);
+            foreach (JToken node in gltfNodes) nodes.Add(node);
+
+            // 场景根只挂 Y-up 根节点，其余节点作为其子节点（glTF 保持扁平层级）
             var gltf = new JObject
             {
                 ["asset"] = new JObject
@@ -134,8 +158,8 @@ namespace RevitToGltf.Output
                     ["generator"] = "revitToGltf"
                 },
                 ["scene"] = 0,
-                ["scenes"] = new JArray { new JObject { ["nodes"] = new JArray(Enumerable.Range(0, gltfNodes.Count)) } },
-                ["nodes"] = gltfNodes,
+                ["scenes"] = new JArray { new JObject { ["nodes"] = new JArray { 0 } } },
+                ["nodes"] = nodes,
                 ["meshes"] = meshes,
                 ["materials"] = materials,
                 ["buffers"] = new JArray { BuildBuffer(gltfPath, binaryLength, asGlb) },
@@ -185,7 +209,7 @@ namespace RevitToGltf.Output
             {
                 if (primitive.VertexCount == 0) continue;
 
-                int materialIndex = GetMaterialIndex(primitive, materials, materialIndexMap, textures, images, textureIndexMap);
+                int materialIndex = GetMaterialIndex(primitive, materials, materialIndexMap, textures, images, textureIndexMap, binary, bufferViews);
 
                 // 顶点数据：位置 / 法线 / UV / 索引，各bufferView按4字节对齐
                 int positionAccessor = WriteVec3Accessor(binary, bufferViews, accessors, primitive.Positions, true);
@@ -291,10 +315,10 @@ namespace RevitToGltf.Output
             }
         }
 
-        /// <summary>材质去重并生成glTF材质定义（含baseColorTexture引用）</summary>
+        /// <summary>材质去重并生成glTF材质定义（含baseColorTexture引用；贴图可为外置URI或内嵌bufferView）</summary>
         private static int GetMaterialIndex(RevitPrimitive primitive, JArray materials,
             Dictionary<int, int> materialIndexMap, JArray textures, JArray images,
-            Dictionary<string, int> textureIndexMap)
+            Dictionary<string, int> textureIndexMap, Stream binary, JArray bufferViews)
         {
             int index;
             if (materialIndexMap.TryGetValue(primitive.MaterialId, out index))
@@ -309,6 +333,7 @@ namespace RevitToGltf.Output
 
             if (!string.IsNullOrEmpty(primitive.TextureUri))
             {
+                // 分离模式：贴图为外部文件（textures/xxx.png）
                 int textureIndex;
                 if (!textureIndexMap.TryGetValue(primitive.TextureUri, out textureIndex))
                 {
@@ -316,6 +341,32 @@ namespace RevitToGltf.Output
                     textures.Add(new JObject { ["source"] = images.Count - 1, ["sampler"] = 0 });
                     textureIndex = textures.Count - 1;
                     textureIndexMap[primitive.TextureUri] = textureIndex;
+                }
+                pbr["baseColorTexture"] = new JObject { ["index"] = textureIndex };
+            }
+            else if (!string.IsNullOrEmpty(primitive.TextureSourcePath))
+            {
+                // 内嵌模式：读字节写进 .bin 缓冲，image 用 bufferView + mimeType 引用（.glb/.gltf 通用）
+                int textureIndex;
+                if (!textureIndexMap.TryGetValue(primitive.TextureSourcePath, out textureIndex))
+                {
+                    byte[] bytes = File.ReadAllBytes(primitive.TextureSourcePath);
+                    long byteOffset = AlignTo4(binary);
+                    binary.Write(bytes, 0, bytes.Length);
+                    bufferViews.Add(new JObject
+                    {
+                        ["buffer"] = 0,
+                        ["byteOffset"] = byteOffset,
+                        ["byteLength"] = (long)bytes.Length
+                    });
+                    images.Add(new JObject
+                    {
+                        ["bufferView"] = bufferViews.Count - 1,
+                        ["mimeType"] = GetImageMimeType(primitive.TextureSourcePath)
+                    });
+                    textures.Add(new JObject { ["source"] = images.Count - 1, ["sampler"] = 0 });
+                    textureIndex = textures.Count - 1;
+                    textureIndexMap[primitive.TextureSourcePath] = textureIndex;
                 }
                 pbr["baseColorTexture"] = new JObject { ["index"] = textureIndex };
             }
@@ -333,6 +384,19 @@ namespace RevitToGltf.Output
             index = materials.Count - 1;
             materialIndexMap[primitive.MaterialId] = index;
             return index;
+        }
+
+        /// <summary>根据扩展名返回 glTF 支持的图片 MIME（内嵌贴图用）</summary>
+        private static string GetImageMimeType(string path)
+        {
+            switch (Path.GetExtension(path).ToLowerInvariant())
+            {
+                case ".jpg":
+                case ".jpeg":
+                    return "image/jpeg";
+                default:
+                    return "image/png";
+            }
         }
 
         /// <summary>写入VEC3数据(位置或法线)，返回accessor索引；数据为空返回-1</summary>

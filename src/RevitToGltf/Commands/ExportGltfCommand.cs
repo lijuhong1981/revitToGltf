@@ -20,7 +20,8 @@ namespace RevitToGltf.Commands
     /// 导出 glTF 命令：单个弹窗内完成全部设置——导出范围（全模型/视图可见/选中构件）、输出目录、
     /// DetailLevel（Coarse/Medium/Fine）与 Triangulate（三角化精度 0~1）滑动条。
     /// 按所选精度提取几何/材质/贴图，写出单个 glTF（.gltf + .bin + textures/）。
-    /// 可选勾选「导出元数据」生成同名 .metadata（项目信息 + 构件 BIM 信息），不调用 3D Tiles 转换器。
+    /// 可选勾选「导出元数据」生成同名 .metadata（项目信息 + 构件 BIM 信息）；贴图默认分离到 textures/，
+    /// 取消「贴图分离」后 PNG/JPEG 贴图内嵌进 .bin/.glb。不调用 3D Tiles 转换器。
     /// 输出为 <根目录>\<项目名>_<detail>_<tri>.gltf（如 ljdd_fine_1.00.gltf），统计追加写入 gltf-export.log。
     /// </summary>
     [Transaction(TransactionMode.Manual)]
@@ -46,8 +47,9 @@ namespace RevitToGltf.Commands
             double? triangulateLod;
             bool binary;
             bool exportMetadata;
+            bool separateTextures;
             if (!SelectSettings(uiDocument, doc, out scopeIds, out scopeName,
-                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary, out exportMetadata))
+                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary, out exportMetadata, out separateTextures))
                 return Result.Cancelled;
             Directory.CreateDirectory(outputDirectory);
 
@@ -80,12 +82,14 @@ namespace RevitToGltf.Commands
                     {
                         OnProgress = (percent, text) => progress.Report(
                             writing ? 85 + percent * 15 / 100 : percent * 85 / 100, text),
-                        ShouldCancel = () => progress.Cancelled
+                        ShouldCancel = () => progress.Cancelled,
+                        SeparateTextures = separateTextures
                     };
                     context.Log(string.Empty);
                     context.Log(string.Format("===== 导出 glTF: {0} ({1}) =====", doc.Title, doc.PathName));
                     context.Log(string.Format("范围: {0}", scopeName));
                     context.Log(string.Format("精度: Detail={0}, Tri={1}", detailLevel, TriText(triangulateLod)));
+                    context.Log(string.Format("贴图: {0}", separateTextures ? "分离到 textures/" : "内嵌进 bin/glb"));
                     context.Log(string.Format("输出文件: {0}", gltfPath));
                     if (exportMetadata)
                         context.Log(string.Format("输出元数据: {0}", metadataPath));
@@ -220,7 +224,7 @@ namespace RevitToGltf.Commands
             out ICollection<ElementId> scopeIds, out string scopeName,
             out string outputDirectory, out string fileName,
             out ViewDetailLevel detailLevel, out double? triangulateLod, out bool binary,
-            out bool exportMetadata)
+            out bool exportMetadata, out bool separateTextures)
         {
             scopeIds = null;
             scopeName = null;
@@ -230,6 +234,7 @@ namespace RevitToGltf.Commands
             triangulateLod = null;
             binary = false;
             exportMetadata = false;
+            separateTextures = true;
 
             string projectName = Path.GetFileNameWithoutExtension(doc.PathName);
             if (string.IsNullOrEmpty(projectName)) projectName = doc.Title;
@@ -243,13 +248,14 @@ namespace RevitToGltf.Commands
             string chosenFile = null;
             bool chosenBinary = false;    // false=.gltf true=.glb
             bool chosenMeta = false;       // 是否导出元数据 .metadata
+            bool chosenSeparateTex = true; // 贴图是否分离到 textures/（默认勾选）
             bool nameEdited = false;      // 用户手工改过文件名后，滑动条不再自动改写
             bool suppressNameSync = false; // 程序化赋值时抑制 TextChanged 的"已编辑"标记
 
             using (var form = new System.Windows.Forms.Form())
             {
                 form.Text = "导出 glTF 设置";
-                form.ClientSize = new System.Drawing.Size(1100, 652);
+                form.ClientSize = new System.Drawing.Size(1100, 672);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
@@ -284,11 +290,11 @@ namespace RevitToGltf.Commands
                 Func<string> triSlug = () => chosenTri.HasValue
                     ? chosenTri.Value.ToString("0.00", CultureInfo.InvariantCulture) : "default";
                 Func<string> defaultName = () => projectName + "_" + DetailSlug(chosenDetail) + "_" + triSlug();
-                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 512, Width = 160 };
+                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 532, Width = 160 };
                 var nameBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 540,
+                    Top = 560,
                     Width = 920,
                     Height = 32,
                     Text = defaultName()
@@ -375,17 +381,17 @@ namespace RevitToGltf.Commands
                 };
 
                 // ---- 输出目录 ----
-                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 438, Width = 160 };
+                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 458, Width = 160 };
                 var dirBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 466,
+                    Top = 486,
                     Width = 920,
                     Height = 32,
                     Text = chosenDir,
                     ReadOnly = true
                 };
-                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 464, Width = 140, Height = 38 };
+                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 484, Width = 140, Height = 38 };
                 browseButton.Click += (s, e) =>
                 {
                     using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
@@ -427,24 +433,36 @@ namespace RevitToGltf.Commands
                 fmtPanel.Controls.Add(radioGltf);
                 fmtPanel.Controls.Add(radioGlb);
 
-                // 导出元数据：独立一行，放在格式选择下方（不放同一 FlowLayoutPanel，避免与格式单选同行）
+                // 贴图分离：独立一行，放在格式选择下方、导出元数据上方
+                var separateTexCheck = new CheckBox
+                {
+                    Text = "贴图分离（不勾选 = 内嵌进 .bin/.glb）",
+                    Left = 12,
+                    Top = 388,
+                    AutoSize = true,
+                    Checked = true,
+                    BackColor = System.Drawing.Color.Transparent
+                };
+                separateTexCheck.CheckedChanged += (s, e) => { chosenSeparateTex = separateTexCheck.Checked; };
+
+                // 导出元数据：独立一行（不放同一 FlowLayoutPanel，避免与格式单选同行）
                 var exportMetaCheck = new CheckBox
                 {
                     Text = "导出元数据（同名 .metadata）",
                     Left = 12,
-                    Top = 388,
+                    Top = 424,
                     AutoSize = true,
                     Checked = false,
                     BackColor = System.Drawing.Color.Transparent
                 };
                 exportMetaCheck.CheckedChanged += (s, e) => { chosenMeta = exportMetaCheck.Checked; };
 
-                var okButton = new Button { Text = "导出", Left = 828, Top = 584, Width = 120, Height = 42 };
+                var okButton = new Button { Text = "导出", Left = 828, Top = 604, Width = 120, Height = 42 };
                 var cancelButton = new Button
                 {
                     Text = "取消",
                     Left = 960,
-                    Top = 584,
+                    Top = 604,
                     Width = 120,
                     Height = 42,
                     DialogResult = DialogResult.Cancel
@@ -499,6 +517,7 @@ namespace RevitToGltf.Commands
                 form.Controls.Add(fmtLabel);
                 form.Controls.Add(fmtPanel);
                 form.Controls.Add(exportMetaCheck);
+                form.Controls.Add(separateTexCheck);
                 form.Controls.Add(detailLabel);
                 form.Controls.Add(radioCoarse);
                 form.Controls.Add(radioMedium);
@@ -544,6 +563,7 @@ namespace RevitToGltf.Commands
             triangulateLod = chosenTri;
             binary = chosenBinary;
             exportMetadata = chosenMeta;
+            separateTextures = chosenSeparateTex;
             return true;
         }
 

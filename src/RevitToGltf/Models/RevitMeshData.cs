@@ -61,6 +61,9 @@ namespace RevitToGltf.Models
         /// <summary>贴图相对路径（textures/xxx.png），null表示使用BaseColor</summary>
         public string TextureUri { get; set; }
 
+        /// <summary>贴图源文件绝对路径（内嵌模式：不写 textures/，由 GltfWriter 读字节写进 .bin/.glb）</summary>
+        public string TextureSourcePath { get; set; }
+
         /// <summary>贴图真实世界缩放（英尺/贴图重复一次）。UV 由 face.Project 的英尺制坐标除以此值得"贴图重复次数"。</summary>
         public double TextureRealWorldScaleU { get; set; } = 1.0;
         public double TextureRealWorldScaleV { get; set; } = 1.0;

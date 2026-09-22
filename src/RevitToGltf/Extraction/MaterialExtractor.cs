@@ -27,11 +27,27 @@ namespace RevitToGltf.Extraction
             primitive.MaterialName = material.Name;
             primitive.DoubleSided = true;
 
-            // 贴图：解析渲染外观中的贴图图片并外置
-            string textureUri = TextureExtractor.Extract(material, doc, context);
-            if (!string.IsNullOrEmpty(textureUri))
+            // 贴图：解析渲染外观中的贴图图片
+            string sourcePath = TextureExtractor.Extract(material, doc, context);
+            if (!string.IsNullOrEmpty(sourcePath))
             {
-                primitive.TextureUri = textureUri;
+                if (context.SeparateTextures)
+                {
+                    // 分离：复制到 textures/ 并引用相对 URI
+                    primitive.TextureUri = TextureExtractor.CopyTexture(sourcePath, context);
+                }
+                else if (TextureExtractor.IsEmbeddable(sourcePath))
+                {
+                    // 内嵌：记录源文件绝对路径，由 GltfWriter 读字节写进 .bin/.glb
+                    primitive.TextureSourcePath = sourcePath;
+                }
+                else
+                {
+                    // 非 PNG/JPEG（如 tga/dds）glTF 无法内嵌，回退为外置
+                    primitive.TextureUri = TextureExtractor.CopyTexture(sourcePath, context);
+                    context.Log(string.Format("贴图格式无法内嵌，回退外置: {0}", material.Name));
+                }
+
                 UV scale = TextureExtractor.GetRealWorldScale(material, doc);
                 primitive.TextureRealWorldScaleU = scale.U;
                 primitive.TextureRealWorldScaleV = scale.V;

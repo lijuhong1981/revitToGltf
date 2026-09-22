@@ -29,8 +29,9 @@ namespace RevitToGltf.Extraction
         private static int s_diagCount;
 
         /// <summary>
-        /// 提取材质贴图并复制到输出目录
-        /// @return 相对URI（如 textures/a1b2c3.png），无贴图返回null
+        /// 解析材质贴图的源文件绝对路径（不复制、不转格式）。
+        /// @return 绝对路径，无贴图返回 null。分离模式由调用方调 CopyTexture 复制到 textures/；
+        /// 内嵌模式直接使用该路径读取字节。
         /// </summary>
         public static string Extract(Material material, Document doc, GltfExportContext context)
         {
@@ -59,14 +60,27 @@ namespace RevitToGltf.Extraction
                 if (string.IsNullOrEmpty(bitmapPath) || !File.Exists(bitmapPath))
                     return null;
 
-                string uri = CopyTexture(bitmapPath, context);
                 context.BitmapTextureCount++;
-                return uri;
+                return bitmapPath;
             }
             catch (Exception ex)
             {
                 context.Log(string.Format("贴图提取失败(材质 {0}): {1}", material.Name, ex.Message));
                 return null;
+            }
+        }
+
+        /// <summary>贴图格式是否可直接内嵌进 glTF（glTF 2.0 仅定义 image/png 与 image/jpeg）</summary>
+        public static bool IsEmbeddable(string path)
+        {
+            switch (Path.GetExtension(path).ToLowerInvariant())
+            {
+                case ".png":
+                case ".jpg":
+                case ".jpeg":
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -339,7 +353,7 @@ namespace RevitToGltf.Extraction
         }
 
         /// <summary>复制贴图文件到输出目录（按内容哈希命名去重，缓存按输出目录区分）</summary>
-        private static string CopyTexture(string sourcePath, GltfExportContext context)
+        public static string CopyTexture(string sourcePath, GltfExportContext context)
         {
             string cacheKey = context.OutputDirectory + "|" + sourcePath;
             string cached;
