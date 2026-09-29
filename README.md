@@ -15,7 +15,7 @@ Revit 文档
 |---|---|
 | `Extraction/GeometryExtractor` | 遍历文档元素提取三角网格，支持嵌套族变换展开，英尺→米换算，DetailLevel/Triangulate 精度控制 |
 | `Extraction/MaterialExtractor` | 材质颜色（渲染外观优先）与透明度 |
-| `Extraction/TextureExtractor` | 从渲染外观提取贴图图片并按内容哈希外置去重 |
+| `Extraction/TextureExtractor` | 从渲染外观提取贴图图片并按内容哈希外置去重；可选把非 2 的幂贴图重采样到最近 2 的幂 |
 | `Extraction/MetadataCollector` | 构件 BIM 元数据采集（类别/族/类型/标高/实例参数） |
 | `Output/GltfWriter` | glTF 2.0 写出（POSITION/NORMAL/TEXCOORD_0，uint32 索引，节点名=构件名_元素ID，构件名/元素ID/UniqueId 写入 extras） |
 | `Output/MetadataWriter` | .metadata 写出（项目信息 + 构件清单，与 glTF 节点按 UniqueId（extras.uniqueId）对齐） |
@@ -23,7 +23,7 @@ Revit 文档
 
 ## 下载安装
 
-无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.4.1.zip`，解压得到：
+无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.5.0.zip`，解压得到：
 
 - `RevitToGltf.dll`
 - `RevitToGltf.addin`
@@ -76,6 +76,7 @@ msbuild revitToGltf.sln -p:Configuration=Release
    - 输出格式（.gltf / .glb）
    - 导出元数据（勾选后额外生成 `<文件名>.metadata`，含构件类别/族/类型/标高/实例参数）
    - 贴图分离（默认勾选 = 贴图外置 textures/ 目录；取消 = PNG/JPEG 贴图内嵌进 .bin/.glb）
+   - 贴图标准化(尺寸2的幂归一化)（默认勾选 = 非 2 的幂 PNG/JPEG 重采样到最近 2 的幂，上限 2048；Cesium 对 REPEAT 贴图会把 NPOT 强制放大到下一 2 的幂，预处理省显存提画质）
 4. 点击「导出」，等待提取完成，弹出统计信息
 
 以上全部设置会记住上次的选择，下次打开弹窗时自动回填（保存于 `%APPDATA%\revitToGltf\settings.json`）；输出文件名按项目名自动生成、不记忆。
