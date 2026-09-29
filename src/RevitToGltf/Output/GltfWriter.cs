@@ -184,7 +184,8 @@ namespace RevitToGltf.Output
                 }
                 else
                 {
-                    File.WriteAllText(gltfPath, gltf.ToString(Formatting.Indented));
+                    // 紧凑 JSON：缩进空白约占 .gltf 体积 30%，查看器与解析器均不需要
+                    File.WriteAllText(gltfPath, gltf.ToString(Formatting.None));
                 }
             }
             catch

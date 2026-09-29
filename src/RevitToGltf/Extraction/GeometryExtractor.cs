@@ -46,7 +46,11 @@ namespace RevitToGltf.Extraction
                 settings = new GeometryDetailSettings("model", ViewDetailLevel.Fine, null);
 
             var result = new ExtractResult();
+            // 诊断计数全部随导出重置（静态字段跨导出残留会让第二次导出的诊断全部消失）
             s_uvFailCount = 0;
+            s_transformLogCount = 0;
+            s_sigLogCount = 0;
+            s_placementDiagDone = false;
             var options = new Options
             {
                 ComputeReferences = false,
@@ -715,19 +719,21 @@ namespace RevitToGltf.Extraction
                     triangleUvs.Add(uvs);
                 }
 
-                // 诊断：整面 UV 投影全为 0，说明 face.Project 对该面失效（返回 null/异常），
-                // 记录面类型与材质名以便定位原因（限流避免刷屏）。
-                if (s_uvFailCount < 8)
+                // 诊断 + 兜底：整面 UV 全为 0（face.Project 与各面型回退都失败）时，
+                // 降级为按面自身三角形拟合平面的投影重建 UV——曲面会有拉伸，但英尺线性映射
+                // 配合真实世界缩放仍能正确平铺，远优于贴图退化成单点（限流只影响日志，不影响修复）。
+                bool allZero = true;
+                for (int i = 0; i < triangleUvs.Count && allZero; i++)
+                    for (int j = 0; j < 3 && allZero; j++)
+                        if (Math.Abs(triangleUvs[i][j].U) > 1e-9 || Math.Abs(triangleUvs[i][j].V) > 1e-9)
+                            allZero = false;
+                if (allZero)
                 {
-                    bool allZero = true;
-                    for (int i = 0; i < triangleUvs.Count && allZero; i++)
-                        for (int j = 0; j < 3 && allZero; j++)
-                            if (Math.Abs(triangleUvs[i][j].U) > 1e-9 || Math.Abs(triangleUvs[i][j].V) > 1e-9)
-                                allZero = false;
-                    if (allZero)
+                    RepairPlanarUV(triangles, triangleUvs, scaleU, scaleV);
+                    if (s_uvFailCount < 8)
                     {
                         s_uvFailCount++;
-                        context.Log(string.Format("UV投影全零面[{0}]: 面类型={1} 三角形={2} 顶点示例={3}",
+                        context.Log(string.Format("UV投影全零面[{0}]: 面类型={1} 三角形={2} 顶点示例={3}，已降级平面投影",
                             material != null ? material.Name : "null", face.GetType().Name, mesh.NumTriangles,
                             mesh.Vertices.Count > 0 ? mesh.Vertices[0].ToString() : "n/a"));
                     }
@@ -810,6 +816,14 @@ namespace RevitToGltf.Extraction
             var rev = face as RevolvedFace;
             if (rev != null)
                 return ProjectRevolutionUV(point, rev.Axis, rev.Origin);
+            // 锥面：与圆柱/旋转面同一近似——u=该高度处弧长(|radial| 即实际半径)，v=自锥点轴向高度
+            var con = face as ConicalFace;
+            if (con != null)
+                return ProjectRevolutionUV(point, con.Axis, con.Origin);
+            // 直纹面：u=沿轮廓曲线弧长，v=沿母线距离（见 ProjectRuledUV）
+            var ruled = face as RuledFace;
+            if (ruled != null)
+                return ProjectRuledUV(ruled, point);
 
             return new UV(0, 0);
         }
@@ -829,6 +843,196 @@ namespace RevitToGltf.Extraction
 
             double angle = Math.Atan2(radial.DotProduct(refV), radial.DotProduct(refU));
             return new UV(angle * radius, v);
+        }
+
+        /// <summary>直纹面采样备忘（按面缓存，同面顶点连续到来，避免逐顶点重复采样）</summary>
+        private static RuledFace s_ruledMemoFace;
+        private static XYZ[] s_ruledMemoA;
+        private static XYZ[] s_ruledMemoB;
+        private static double s_ruledMemoTotalA;
+        private static double s_ruledMemoTotalB;
+        private static bool s_ruledMemoHasCurveA;
+        private static bool s_ruledMemoHasCurveB;
+
+        /// <summary>直纹面按弧长重采样的目标点数</summary>
+        private const int RuledSampleCount = 64;
+
+        /// <summary>
+        /// 直纹面(RuledFace)近似 UV：u=沿轮廓弧长(英尺)，v=沿母线距离(英尺)。
+        /// 直纹面由两侧轮廓（曲线 Curve[i]，或退化为点 Point[i]）之间的母线张成：
+        /// X(u,v) = (1-v)*C0(u) + v*C1(u)。两侧曲线按归一化弧长重采样成一一对齐后，
+        /// 把目标点投影到最近的母线段上：u=该处轮廓弧长（两侧都有曲线取均值，点侧不参与），
+        /// v=沿母线的有符号距离。两种形态下均为英尺制，可与真实世界缩放统一换算。
+        /// 任何失败返回 (0,0)（与无回退时的行为一致，不影响几何）。
+        /// </summary>
+        private static UV ProjectRuledUV(RuledFace face, XYZ point)
+        {
+            try
+            {
+                if (!ReferenceEquals(face, s_ruledMemoFace))
+                    BuildRuledMemo(face);
+
+                int n = s_ruledMemoA.Length;
+                if (n == 0) return new UV(0, 0);
+
+                double bestDist = double.MaxValue, bestU = 0, bestV = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    XYZ a = s_ruledMemoA[i], b = s_ruledMemoB[i];
+                    XYZ ab = b - a;
+                    double lenSq = ab.DotProduct(ab);
+                    double t = lenSq > 1e-18
+                        ? Math.Max(0.0, Math.Min(1.0, point.Subtract(a).DotProduct(ab) / lenSq))
+                        : 0.0;
+                    double d = point.DistanceTo(a + ab * t);
+                    if (d < bestDist)
+                    {
+                        bestDist = d;
+                        double f = (double)i / (n - 1);
+                        if (s_ruledMemoHasCurveA && s_ruledMemoHasCurveB)
+                            bestU = (s_ruledMemoTotalA + s_ruledMemoTotalB) * 0.5 * f;
+                        else if (s_ruledMemoHasCurveA)
+                            bestU = s_ruledMemoTotalA * f;
+                        else
+                            bestU = s_ruledMemoTotalB * f;
+                        bestV = t * Math.Sqrt(lenSq);
+                    }
+                }
+                return new UV(bestU, bestV);
+            }
+            catch
+            {
+                return new UV(0, 0);
+            }
+        }
+
+        /// <summary>预计算直纹面两侧轮廓的弧长对齐采样（结果存入备忘字段）</summary>
+        private static void BuildRuledMemo(RuledFace face)
+        {
+            s_ruledMemoFace = face;
+            s_ruledMemoA = new XYZ[0];
+            s_ruledMemoB = new XYZ[0];
+            s_ruledMemoTotalA = s_ruledMemoTotalB = 0;
+            s_ruledMemoHasCurveA = s_ruledMemoHasCurveB = false;
+
+            IList<XYZ> t0 = TessellateRuledSide(face, 0);
+            IList<XYZ> t1 = TessellateRuledSide(face, 1);
+            if (t0 == null && t1 == null)
+                return;   // 两侧都取不到曲线：面积退化，UV 置零（数组长度 0）
+
+            int n = RuledSampleCount;
+            if (t0 != null)
+            {
+                s_ruledMemoA = ResampleByArc(t0, n);
+                s_ruledMemoTotalA = PolylineLength(t0);
+                s_ruledMemoHasCurveA = true;
+            }
+            else
+            {
+                XYZ p = TryGetRuledPoint(face, 0) ?? XYZ.Zero;
+                s_ruledMemoA = Enumerable.Repeat(p, n).ToArray();
+            }
+            if (t1 != null)
+            {
+                s_ruledMemoB = ResampleByArc(t1, n);
+                s_ruledMemoTotalB = PolylineLength(t1);
+                s_ruledMemoHasCurveB = true;
+            }
+            else
+            {
+                XYZ p = TryGetRuledPoint(face, 1) ?? XYZ.Zero;
+                s_ruledMemoB = Enumerable.Repeat(p, n).ToArray();
+            }
+        }
+
+        /// <summary>取直纹面某一侧的轮廓曲线并细化（该侧退化为点时返回 null）</summary>
+        private static IList<XYZ> TessellateRuledSide(RuledFace face, int side)
+        {
+            try
+            {
+                Curve curve = face.get_Curve(side);
+                if (curve == null) return null;
+                IList<XYZ> pts = curve.Tessellate();
+                return pts != null && pts.Count >= 2 ? pts : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>取直纹面某一侧的定义点（该侧为曲线时可能抛异常，返回 null）</summary>
+        private static XYZ TryGetRuledPoint(RuledFace face, int side)
+        {
+            try { return face.get_Point(side); }
+            catch { return null; }
+        }
+
+        /// <summary>折线总长（英尺）</summary>
+        private static double PolylineLength(IList<XYZ> pts)
+        {
+            double total = 0;
+            for (int i = 1; i < pts.Count; i++)
+                total += pts[i].DistanceTo(pts[i - 1]);
+            return total;
+        }
+
+        /// <summary>
+        /// 兜底 UV：当 Project 与所有面型回退都失败（整面 UV 全零）时，按该面自身三角形
+        /// 拟合的平面做平面投影重建 UV——面积加权法线（Newell）为平面法向、顶点质心为原点、
+        /// 平面内取正交基。曲面会有拉伸，但英尺线性映射配合真实世界缩放仍能按尺寸平铺。
+        /// </summary>
+        private static void RepairPlanarUV(List<XYZ[]> triangles, List<UV[]> triangleUvs, double scaleU, double scaleV)
+        {
+            XYZ normal = XYZ.Zero;
+            XYZ centroid = XYZ.Zero;
+            int count = 0;
+            foreach (XYZ[] tri in triangles)
+            {
+                normal += (tri[1] - tri[0]).CrossProduct(tri[2] - tri[0]);   // 叉积模长=2×面积，天然面积加权
+                centroid += tri[0] + tri[1] + tri[2];
+                count += 3;
+            }
+            if (count == 0 || normal.GetLength() < 1e-12) return;
+            normal = normal.Normalize();
+            XYZ origin = centroid / count;
+
+            XYZ axisX = normal.CrossProduct(XYZ.BasisZ);
+            if (axisX.GetLength() < 1e-9) axisX = normal.CrossProduct(XYZ.BasisX);
+            axisX = axisX.Normalize();
+            XYZ axisY = normal.CrossProduct(axisX);
+
+            for (int i = 0; i < triangles.Count; i++)
+                for (int j = 0; j < 3; j++)
+                {
+                    XYZ d = triangles[i][j] - origin;
+                    triangleUvs[i][j] = new UV(d.DotProduct(axisX) / scaleU, d.DotProduct(axisY) / scaleV);
+                }
+        }
+
+        /// <summary>把折线按归一化弧长重采样为 n 个点（弧长均匀分布）</summary>
+        private static XYZ[] ResampleByArc(IList<XYZ> pts, int n)
+        {
+            var arc = new double[pts.Count];
+            double total = 0;
+            for (int i = 1; i < pts.Count; i++)
+            {
+                total += pts[i].DistanceTo(pts[i - 1]);
+                arc[i] = total;
+            }
+
+            var result = new XYZ[n];
+            int seg = 0;
+            for (int j = 0; j < n; j++)
+            {
+                double target = total * j / (n - 1);
+                while (seg < pts.Count - 2 && arc[seg + 1] < target)
+                    seg++;
+                double segLen = arc[seg + 1] - arc[seg];
+                double f = segLen > 1e-12 ? (target - arc[seg]) / segLen : 0;
+                result[j] = pts[seg] + (pts[seg + 1] - pts[seg]) * f;
+            }
+            return result;
         }
 
         /// <summary>顶点写入并按英尺→米换算</summary>
