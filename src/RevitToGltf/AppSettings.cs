@@ -25,6 +25,7 @@ namespace RevitToGltf
             public bool Binary { get; set; }                    // true = .glb
             public bool ExportMetadata { get; set; }
             public bool SeparateTextures { get; set; } = true;
+            public bool NormalizeTextures { get; set; } = true;
         }
 
         private static Settings _cached;

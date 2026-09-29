@@ -48,8 +48,9 @@ namespace RevitToGltf.Commands
             bool binary;
             bool exportMetadata;
             bool separateTextures;
+            bool normalizeTextures;
             if (!SelectSettings(uiDocument, doc, out scopeIds, out scopeName,
-                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary, out exportMetadata, out separateTextures))
+                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary, out exportMetadata, out separateTextures, out normalizeTextures))
                 return Result.Cancelled;
             Directory.CreateDirectory(outputDirectory);
 
@@ -83,13 +84,16 @@ namespace RevitToGltf.Commands
                         OnProgress = (percent, text) => progress.Report(
                             writing ? 85 + percent * 15 / 100 : percent * 85 / 100, text),
                         ShouldCancel = () => progress.Cancelled,
-                        SeparateTextures = separateTextures
+                        SeparateTextures = separateTextures,
+                        NormalizeTextures = normalizeTextures
                     };
                     context.Log(string.Empty);
                     context.Log(string.Format("===== 导出 glTF: {0} ({1}) =====", doc.Title, doc.PathName));
                     context.Log(string.Format("范围: {0}", scopeName));
                     context.Log(string.Format("精度: Detail={0}, Tri={1}", detailLevel, TriText(triangulateLod)));
-                    context.Log(string.Format("贴图: {0}", separateTextures ? "分离到 textures/" : "内嵌进 bin/glb"));
+                    context.Log(string.Format("贴图: {0}, 2的幂归一化: {1}",
+                        separateTextures ? "分离到 textures/" : "内嵌进 bin/glb",
+                        normalizeTextures ? "开" : "关"));
                     context.Log(string.Format("输出文件: {0}", gltfPath));
                     if (exportMetadata)
                         context.Log(string.Format("输出元数据: {0}", metadataPath));
@@ -223,7 +227,7 @@ namespace RevitToGltf.Commands
             out ICollection<ElementId> scopeIds, out string scopeName,
             out string outputDirectory, out string fileName,
             out ViewDetailLevel detailLevel, out double? triangulateLod, out bool binary,
-            out bool exportMetadata, out bool separateTextures)
+            out bool exportMetadata, out bool separateTextures, out bool normalizeTextures)
         {
             scopeIds = null;
             scopeName = null;
@@ -234,6 +238,7 @@ namespace RevitToGltf.Commands
             binary = false;
             exportMetadata = false;
             separateTextures = true;
+            normalizeTextures = true;
 
             string projectName = Path.GetFileNameWithoutExtension(doc.PathName);
             if (string.IsNullOrEmpty(projectName)) projectName = doc.Title;
@@ -254,13 +259,14 @@ namespace RevitToGltf.Commands
             bool chosenBinary = saved.Binary;    // false=.gltf true=.glb
             bool chosenMeta = saved.ExportMetadata;       // 是否导出元数据 .metadata
             bool chosenSeparateTex = saved.SeparateTextures; // 贴图是否分离到 textures/（默认勾选）
+            bool chosenNormalizeTex = saved.NormalizeTextures; // 贴图重采样到最近 2 的幂（默认勾选）
             bool nameEdited = false;      // 用户手工改过文件名后，滑动条不再自动改写
             bool suppressNameSync = false; // 程序化赋值时抑制 TextChanged 的"已编辑"标记
 
             using (var form = new System.Windows.Forms.Form())
             {
                 form.Text = "导出 glTF 设置";
-                form.ClientSize = new System.Drawing.Size(1100, 672);
+                form.ClientSize = new System.Drawing.Size(1100, 708);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
@@ -297,11 +303,11 @@ namespace RevitToGltf.Commands
                 Func<string> triSlug = () => chosenTri.HasValue
                     ? chosenTri.Value.ToString("0.00", CultureInfo.InvariantCulture) : "default";
                 Func<string> defaultName = () => projectName + "_" + DetailSlug(chosenDetail) + "_" + triSlug();
-                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 532, Width = 160 };
+                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 568, Width = 160 };
                 var nameBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 560,
+                    Top = 596,
                     Width = 920,
                     Height = 32,
                     Text = defaultName()
@@ -390,17 +396,17 @@ namespace RevitToGltf.Commands
                 };
 
                 // ---- 输出目录 ----
-                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 458, Width = 160 };
+                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 494, Width = 160 };
                 var dirBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 486,
+                    Top = 522,
                     Width = 920,
                     Height = 32,
                     Text = chosenDir,
                     ReadOnly = true
                 };
-                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 484, Width = 140, Height = 38 };
+                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 520, Width = 140, Height = 38 };
                 browseButton.Click += (s, e) =>
                 {
                     using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
@@ -455,24 +461,36 @@ namespace RevitToGltf.Commands
                 };
                 separateTexCheck.CheckedChanged += (s, e) => { chosenSeparateTex = separateTexCheck.Checked; };
 
+                // 贴图 2 的幂归一化：独立一行（贴图分离下方），非 2 的幂 PNG/JPEG 重采样到最近 2 的幂
+                var normalizeTexCheck = new CheckBox
+                {
+                    Text = "贴图标准化(尺寸2的幂归一化)",
+                    Left = 12,
+                    Top = 424,
+                    AutoSize = true,
+                    Checked = chosenNormalizeTex,
+                    BackColor = System.Drawing.Color.Transparent
+                };
+                normalizeTexCheck.CheckedChanged += (s, e) => { chosenNormalizeTex = normalizeTexCheck.Checked; };
+
                 // 导出元数据：独立一行（不放同一 FlowLayoutPanel，避免与格式单选同行）
                 var exportMetaCheck = new CheckBox
                 {
                     Text = "导出元数据（同名 .metadata）",
                     Left = 12,
-                    Top = 424,
+                    Top = 460,
                     AutoSize = true,
                     Checked = chosenMeta,
                     BackColor = System.Drawing.Color.Transparent
                 };
                 exportMetaCheck.CheckedChanged += (s, e) => { chosenMeta = exportMetaCheck.Checked; };
 
-                var okButton = new Button { Text = "导出", Left = 828, Top = 604, Width = 120, Height = 42 };
+                var okButton = new Button { Text = "导出", Left = 828, Top = 640, Width = 120, Height = 42 };
                 var cancelButton = new Button
                 {
                     Text = "取消",
                     Left = 960,
-                    Top = 604,
+                    Top = 640,
                     Width = 120,
                     Height = 42,
                     DialogResult = DialogResult.Cancel
@@ -523,7 +541,8 @@ namespace RevitToGltf.Commands
                         TriangulateLod = chosenTri ?? 1.0,
                         Binary = chosenBinary,
                         ExportMetadata = chosenMeta,
-                        SeparateTextures = chosenSeparateTex
+                        SeparateTextures = chosenSeparateTex,
+                        NormalizeTextures = chosenNormalizeTex
                     });
                     form.DialogResult = DialogResult.OK;
                     form.Close();
@@ -539,6 +558,7 @@ namespace RevitToGltf.Commands
                 form.Controls.Add(fmtPanel);
                 form.Controls.Add(exportMetaCheck);
                 form.Controls.Add(separateTexCheck);
+                form.Controls.Add(normalizeTexCheck);
                 form.Controls.Add(detailLabel);
                 form.Controls.Add(radioCoarse);
                 form.Controls.Add(radioMedium);
@@ -585,6 +605,7 @@ namespace RevitToGltf.Commands
             binary = chosenBinary;
             exportMetadata = chosenMeta;
             separateTextures = chosenSeparateTex;
+            normalizeTextures = chosenNormalizeTex;
             return true;
         }
 

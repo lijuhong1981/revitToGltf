@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using RevitToGltf.Extraction;
 using RevitToGltf.Models;
 using RevitToGltf.Pipeline;
 
@@ -77,7 +78,7 @@ namespace RevitToGltf.Output
                     for (int i = 0; i < result.SharedMeshes.Count; i++)
                     {
                         context.ThrowIfCancelled();
-                        sharedMeshIndex[i] = WriteMesh(binary, result.SharedMeshes[i].Primitives,
+                        sharedMeshIndex[i] = WriteMesh(binary, result.SharedMeshes[i].Primitives, context,
                             bufferViews, accessors, meshes, materials, images, textures,
                             materialIndexMap, textureIndexMap, ref vertexTotal);
                         writtenMeshes++;
@@ -89,7 +90,7 @@ namespace RevitToGltf.Output
                     foreach (RevitElementNode node in result.UniqueNodes)
                     {
                         context.ThrowIfCancelled();
-                        int meshIndex = WriteMesh(binary, node.Primitives,
+                        int meshIndex = WriteMesh(binary, node.Primitives, context,
                             bufferViews, accessors, meshes, materials, images, textures,
                             materialIndexMap, textureIndexMap, ref vertexTotal);
                         gltfNodes.Add(new JObject
@@ -194,12 +195,12 @@ namespace RevitToGltf.Output
 
             context.Log(string.Format("glTF写出完成: 节点 {0} 个, 网格 {1} 个, 材质 {2} 个, 贴图 {3} 个, 顶点 {4:N0} 个, 二进制 {5:0.0}MB",
                 gltfNodes.Count, meshes.Count, materials.Count, images.Count, vertexTotal, binaryLength / 1048576.0));
-            context.Log(string.Format("材质贴图诊断: 处理材质 {0} 个, 含渲染外观资产 {1} 个, 含位图贴图 {2} 个",
-                context.MaterialCount, context.AppearanceAssetCount, context.BitmapTextureCount));
+            context.Log(string.Format("材质贴图诊断: 处理材质 {0} 个, 含渲染外观资产 {1} 个, 含位图贴图 {2} 个, 2的幂归一化 {3} 张",
+                context.MaterialCount, context.AppearanceAssetCount, context.BitmapTextureCount, context.NormalizedTextureCount));
         }
 
         /// <summary>写一个网格（一组图元）的二进制数据与mesh定义，返回mesh索引。顶点数据写完即释放。</summary>
-        private static int WriteMesh(Stream binary, List<RevitPrimitive> primitives,
+        private static int WriteMesh(Stream binary, List<RevitPrimitive> primitives, GltfExportContext context,
             JArray bufferViews, JArray accessors, JArray meshes, JArray materials,
             JArray images, JArray textures, Dictionary<int, int> materialIndexMap,
             Dictionary<string, int> textureIndexMap, ref long vertexTotal)
@@ -209,7 +210,7 @@ namespace RevitToGltf.Output
             {
                 if (primitive.VertexCount == 0) continue;
 
-                int materialIndex = GetMaterialIndex(primitive, materials, materialIndexMap, textures, images, textureIndexMap, binary, bufferViews);
+                int materialIndex = GetMaterialIndex(primitive, context, materials, materialIndexMap, textures, images, textureIndexMap, binary, bufferViews);
 
                 // 顶点数据：位置 / 法线 / UV / 索引，各bufferView按4字节对齐
                 int positionAccessor = WriteVec3Accessor(binary, bufferViews, accessors, primitive.Positions, true);
@@ -324,7 +325,7 @@ namespace RevitToGltf.Output
         }
 
         /// <summary>材质去重并生成glTF材质定义（含baseColorTexture引用；贴图可为外置URI或内嵌bufferView）</summary>
-        private static int GetMaterialIndex(RevitPrimitive primitive, JArray materials,
+        private static int GetMaterialIndex(RevitPrimitive primitive, GltfExportContext context, JArray materials,
             Dictionary<int, int> materialIndexMap, JArray textures, JArray images,
             Dictionary<string, int> textureIndexMap, Stream binary, JArray bufferViews)
         {
@@ -354,11 +355,12 @@ namespace RevitToGltf.Output
             }
             else if (!string.IsNullOrEmpty(primitive.TextureSourcePath))
             {
-                // 内嵌模式：读字节写进 .bin 缓冲，image 用 bufferView + mimeType 引用（.glb/.gltf 通用）
+                // 内嵌模式：读字节写进 .bin 缓冲（开启归一化时先重采样到最近 2 的幂），
+                // image 用 bufferView + mimeType 引用（.glb/.gltf 通用）
                 int textureIndex;
                 if (!textureIndexMap.TryGetValue(primitive.TextureSourcePath, out textureIndex))
                 {
-                    byte[] bytes = File.ReadAllBytes(primitive.TextureSourcePath);
+                    byte[] bytes = TextureExtractor.GetTextureBytes(primitive.TextureSourcePath, context);
                     long byteOffset = AlignTo4(binary);
                     binary.Write(bytes, 0, bytes.Length);
                     bufferViews.Add(new JObject

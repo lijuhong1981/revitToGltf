@@ -24,6 +24,13 @@ namespace RevitToGltf.Pipeline
         /// <summary>贴图是否分离到 textures/ 目录（默认 true）。false = 内嵌进 .bin/.glb</summary>
         public bool SeparateTextures { get; set; } = true;
 
+        /// <summary>是否把非 2 的幂 PNG/JPEG 贴图重采样到最近 2 的幂（上限 2048）。
+        /// Cesium 对 REPEAT+mipmap 的 NPOT 贴图会强制 canvas 放大到下一 2 的幂，预处理可省显存提画质</summary>
+        public bool NormalizeTextures { get; set; } = true;
+
+        /// <summary>统计：归一化的贴图数</summary>
+        public int NormalizedTextureCount { get; set; }
+
         /// <summary>实例化统计：共享网格个数</summary>
         public int SharedMeshCount { get; set; }
 

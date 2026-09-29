@@ -352,7 +352,8 @@ namespace RevitToGltf.Extraction
             return null;
         }
 
-        /// <summary>复制贴图文件到输出目录（按内容哈希命名去重，缓存按输出目录区分）</summary>
+        /// <summary>复制贴图文件到输出目录（按内容哈希命名去重，缓存按输出目录区分）。
+        /// 开启归一化时哈希基于归一化后的字节（相近尺寸的同图能多去重一次）。</summary>
         public static string CopyTexture(string sourcePath, GltfExportContext context)
         {
             string cacheKey = context.OutputDirectory + "|" + sourcePath;
@@ -360,7 +361,7 @@ namespace RevitToGltf.Extraction
             if (CopiedTextures.TryGetValue(cacheKey, out cached))
                 return cached;
 
-            byte[] content = File.ReadAllBytes(sourcePath);
+            byte[] content = GetTextureBytes(sourcePath, context);
             string hash;
             using (var sha1 = SHA1.Create())
             {
@@ -384,6 +385,136 @@ namespace RevitToGltf.Extraction
 
             CopiedTextures[cacheKey] = relativeUri;
             return relativeUri;
+        }
+
+        /// <summary>贴图 2 的幂上限：与 modelTo3DTiles 的 ATLAS_MAX_SIZE 对齐</summary>
+        private const int MaxTextureSize = 2048;
+
+        /// <summary>归一化结果缓存：归一化开关|源路径 → 字节（仅 NPOT 贴图入缓存；同一会话不同开关不串扰）</summary>
+        private static readonly Dictionary<string, byte[]> NormalizedTextures = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 读取贴图字节：开启归一化且为 PNG/JPEG 的非 2 的幂贴图时，先重采样到最近 2 的幂（上限 2048）。
+        /// Cesium 的 glTF 纹理路径对 REPEAT+mipmap 的 NPOT 贴图会无条件用 canvas 放大到下一 2 的幂
+        /// （画质差、像素最多 4 倍、每次加载都做），转换期预处理为最近 2 的幂可三重收益。
+        /// 分离（写 textures/）与内嵌（进 .bin/.glb）两路共用；任何失败回退原始字节，绝不阻断导出。
+        /// </summary>
+        public static byte[] GetTextureBytes(string sourcePath, GltfExportContext context)
+        {
+            byte[] content = File.ReadAllBytes(sourcePath);
+            if (!context.NormalizeTextures || !IsEmbeddable(sourcePath))
+                return content;
+
+            string cacheKey = (context.NormalizeTextures ? "N|" : "R|") + sourcePath;
+            byte[] normalized;
+            if (NormalizedTextures.TryGetValue(cacheKey, out normalized))
+            {
+                // 缓存命中（同一会话先导过其它格式）：贴图仍是归一化后的，计入本文件统计
+                context.NormalizedTextureCount++;
+                return normalized;
+            }
+
+            normalized = NormalizeToPowerOfTwo(content, Path.GetExtension(sourcePath), context);
+            if (normalized != null)
+            {
+                NormalizedTextures[cacheKey] = normalized;
+                return normalized;
+            }
+            return content;
+        }
+
+        /// <summary>
+        /// GDI+ 重采样到最近 2 的幂（每边独立，上限 2048）。已是 2 的幂返回 null（无需处理）。
+        /// jpg 保持 jpg（质量 90）、png 保持 png，避免格式漂移导致体积暴涨；
+        /// 解码/编码失败返回 null，由调用方回退原始字节。
+        /// </summary>
+        private static byte[] NormalizeToPowerOfTwo(byte[] content, string extension, GltfExportContext context)
+        {
+            try
+            {
+                using (var ms = new MemoryStream(content))
+                using (System.Drawing.Image image = System.Drawing.Image.FromStream(ms))
+                {
+                    int width = image.Width, height = image.Height;
+                    int targetWidth = Math.Min(NearestPowerOfTwo(width), MaxTextureSize);
+                    int targetHeight = Math.Min(NearestPowerOfTwo(height), MaxTextureSize);
+                    if ((IsPowerOfTwo(width) && IsPowerOfTwo(height))
+                        || (targetWidth == width && targetHeight == height))
+                        return null;
+
+                    using (var resized = new System.Drawing.Bitmap(targetWidth, targetHeight))
+                    using (var g = System.Drawing.Graphics.FromImage(resized))
+                    {
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                        g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                        // TileFlipXY 防止重采样读取越界时边缘与透明背景混合出现半透明镶边
+                        using (var attrs = new System.Drawing.Imaging.ImageAttributes())
+                        {
+                            attrs.SetWrapMode(System.Drawing.Drawing2D.WrapMode.TileFlipXY);
+                            g.DrawImage(image,
+                                new System.Drawing.Rectangle(0, 0, targetWidth, targetHeight),
+                                0, 0, width, height, System.Drawing.GraphicsUnit.Pixel, attrs);
+                        }
+
+                        using (var outMs = new MemoryStream())
+                        {
+                            bool isJpeg = extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+                                       || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
+                            if (isJpeg)
+                            {
+                                System.Drawing.Imaging.ImageCodecInfo jpeg = FindJpegEncoder();
+                                if (jpeg != null)
+                                {
+                                    using (var eps = new System.Drawing.Imaging.EncoderParameters(1))
+                                    {
+                                        eps.Param[0] = new System.Drawing.Imaging.EncoderParameter(
+                                            System.Drawing.Imaging.Encoder.Quality, 90L);
+                                        resized.Save(outMs, jpeg, eps);
+                                    }
+                                }
+                                else
+                                {
+                                    resized.Save(outMs, System.Drawing.Imaging.ImageFormat.Jpeg);
+                                }
+                            }
+                            else
+                            {
+                                resized.Save(outMs, System.Drawing.Imaging.ImageFormat.Png);
+                            }
+
+                            context.NormalizedTextureCount++;
+                            context.Log(string.Format("贴图归一化: {0} {1}×{2} → {3}×{4}",
+                                Path.GetExtension(extension), width, height, targetWidth, targetHeight));
+                            return outMs.ToArray();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                context.Log(string.Format("贴图归一化失败({0}): {1}，使用原始贴图", extension, ex.Message));
+                return null;
+            }
+        }
+
+        private static System.Drawing.Imaging.ImageCodecInfo FindJpegEncoder()
+        {
+            foreach (System.Drawing.Imaging.ImageCodecInfo codec in System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders())
+                if (codec.MimeType == "image/jpeg")
+                    return codec;
+            return null;
+        }
+
+        private static bool IsPowerOfTwo(int n)
+        {
+            return n > 0 && (n & (n - 1)) == 0;
+        }
+
+        /// <summary>最近的 2 次幂（≥1），如 600→512、800→1024</summary>
+        private static int NearestPowerOfTwo(int n)
+        {
+            return (int)Math.Max(1, Math.Pow(2, Math.Round(Math.Log(n, 2))));
         }
     }
 }
