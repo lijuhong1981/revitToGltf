@@ -23,7 +23,7 @@ Revit 文档
 
 ## 下载安装
 
-无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.5.0.zip`，解压得到：
+无需编译，直接使用发布包。从 [GitHub Releases](https://github.com/lijuhong1981/revitToGltf/releases) 下载 `revitToGltf-v0.5.1.zip`，解压得到：
 
 - `RevitToGltf.dll`
 - `RevitToGltf.addin`
