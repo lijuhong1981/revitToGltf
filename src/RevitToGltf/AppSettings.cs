@@ -26,6 +26,7 @@ namespace RevitToGltf
             public bool ExportMetadata { get; set; }
             public bool SeparateTextures { get; set; } = true;
             public bool NormalizeTextures { get; set; } = true;
+            public bool DracoEnabled { get; set; }
         }
 
         private static Settings _cached;

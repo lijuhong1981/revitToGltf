@@ -175,6 +175,13 @@ namespace RevitToGltf.Output
                 gltf["samplers"] = samplers;
             }
 
+            // 声明 Draco 扩展（有图元实际压缩时才声明；extensionsRequired：不支持解码的查看器应拒绝加载而非渲染错误）
+            if (context.DracoAnyUsed)
+            {
+                gltf["extensionsUsed"] = new JArray("KHR_draco_mesh_compression");
+                gltf["extensionsRequired"] = new JArray("KHR_draco_mesh_compression");
+            }
+
             try
             {
                 if (asGlb)
@@ -213,27 +220,98 @@ namespace RevitToGltf.Output
 
                 int materialIndex = GetMaterialIndex(primitive, context, materials, materialIndexMap, textures, images, textureIndexMap, binary, bufferViews);
 
-                // 顶点数据：位置 / 法线 / UV / 索引，各bufferView按4字节对齐
-                int positionAccessor = WriteVec3Accessor(binary, bufferViews, accessors, primitive.Positions, true);
-                int normalAccessor = WriteVec3Accessor(binary, bufferViews, accessors, primitive.Normals, false);
-                int uvAccessor = -1;
-                if (primitive.Uvs.Count == primitive.VertexCount * 2)
-                    uvAccessor = WriteVec2Accessor(binary, bufferViews, accessors, primitive.Uvs);
-                int indexAccessor = WriteIndexAccessor(binary, bufferViews, accessors, primitive.Indices);
-
                 vertexTotal += primitive.VertexCount;
 
-                var attributes = new JObject { ["POSITION"] = positionAccessor };
-                if (normalAccessor >= 0) attributes["NORMAL"] = normalAccessor;
-                if (uvAccessor >= 0) attributes["TEXCOORD_0"] = uvAccessor;
-
-                primitivesJson.Add(new JObject
+                // Draco 压缩路径：几何编码进独立 bufferView，primitive 以扩展引用，
+                // 不再写裸 attributes/indices。任何失败回退未压缩路径，绝不阻断导出。
+                bool compressed = false;
+                if (context.DracoEnabled && context.DracoFailedCount == 0)
                 {
-                    ["attributes"] = attributes,
-                    ["indices"] = indexAccessor,
-                    ["material"] = materialIndex,
-                    ["mode"] = 4  // TRIANGLES
-                });
+                    if (primitive.Indices.Count / 3 > Native.DracoEncoder.MaxTriangles)
+                    {
+                        // 超大单图元跳过压缩（对齐 modelTo3DTiles 的安全上限），不影响其它图元
+                        if (context.DracoSkippedCount == 0)
+                            context.Log(string.Format("图元三角形 {0:N0} 超出 Draco 上限 {1:N0}，该图元不压缩",
+                                primitive.Indices.Count / 3, (long)Native.DracoEncoder.MaxTriangles));
+                        context.DracoSkippedCount++;
+                    }
+                    else
+                    {
+                        byte[] encoded = Native.DracoEncoder.Encode(
+                            primitive.Positions, primitive.Normals, primitive.Uvs, primitive.Indices);
+                        if (encoded != null)
+                        {
+                            long byteOffset = AlignTo4(binary);
+                            binary.Write(encoded, 0, encoded.Length);
+
+                            // 属性局部下标与包装层添加顺序严格对应：0=POSITION 1=NORMAL 2=TEXCOORD
+                            var extAttributes = new JObject { ["POSITION"] = 0 };
+                            int attrIndex = 1;
+                            if (primitive.Normals.Count == primitive.VertexCount * 3)
+                                extAttributes["NORMAL"] = attrIndex++;
+                            if (primitive.Uvs.Count == primitive.VertexCount * 2)
+                                extAttributes["TEXCOORD_0"] = attrIndex;
+
+                            bufferViews.Add(new JObject
+                            {
+                                ["buffer"] = 0,
+                                ["byteOffset"] = byteOffset,
+                                ["byteLength"] = encoded.Length
+                            });
+
+                            primitivesJson.Add(new JObject
+                            {
+                                ["extensions"] = new JObject
+                                {
+                                    ["KHR_draco_mesh_compression"] = new JObject
+                                    {
+                                        ["bufferView"] = bufferViews.Count - 1,
+                                        ["attributes"] = extAttributes
+                                    }
+                                },
+                                ["material"] = materialIndex,
+                                ["mode"] = 4  // TRIANGLES
+                            });
+
+                            compressed = true;
+                            context.DracoPrimitiveCount++;
+                            context.DracoRawBytes += (long)(primitive.Positions.Count + primitive.Normals.Count
+                                + primitive.Uvs.Count) * 4 + (long)primitive.Indices.Count * 2;
+                            context.DracoCompressedBytes += encoded.Length;
+                            context.DracoAnyUsed = true;
+                        }
+                        else
+                        {
+                            // 熔断：一次编码失败大概率是系统性问题，后续图元全部回退未压缩
+                            context.DracoFailedCount++;
+                            context.Log(string.Format("Draco 编码失败(图元顶点 {0:N0})，后续图元回退未压缩",
+                                primitive.VertexCount));
+                        }
+                    }
+                }
+
+                if (!compressed)
+                {
+                    // 顶点数据：位置 / 法线 / UV / 索引，各bufferView按4字节对齐
+                    int positionAccessor = WriteVec3Accessor(binary, bufferViews, accessors, primitive.Positions, true);
+                    int normalAccessor = WriteVec3Accessor(binary, bufferViews, accessors, primitive.Normals, false);
+                    int uvAccessor = -1;
+                    if (primitive.Uvs.Count == primitive.VertexCount * 2)
+                        uvAccessor = WriteVec2Accessor(binary, bufferViews, accessors, primitive.Uvs);
+                    int indexAccessor = WriteIndexAccessor(binary, bufferViews, accessors, primitive.Indices);
+
+                    var attributes = new JObject { ["POSITION"] = positionAccessor };
+                    if (normalAccessor >= 0) attributes["NORMAL"] = normalAccessor;
+                    if (uvAccessor >= 0) attributes["TEXCOORD_0"] = uvAccessor;
+
+                    primitivesJson.Add(new JObject
+                    {
+                        ["attributes"] = attributes,
+                        ["indices"] = indexAccessor,
+                        ["material"] = materialIndex,
+                        ["mode"] = 4  // TRIANGLES
+                    });
+                }
 
                 // 顶点数据已落盘，立即释放；否则整个写出阶段都维持峰值内存
                 ReleasePrimitive(primitive);

@@ -31,6 +31,27 @@ namespace RevitToGltf.Pipeline
         /// <summary>统计：归一化的贴图数</summary>
         public int NormalizedTextureCount { get; set; }
 
+        /// <summary>是否启用 Draco 几何压缩（KHR_draco_mesh_compression；输出需查看器支持解码）</summary>
+        public bool DracoEnabled { get; set; }
+
+        /// <summary>Draco：编码失败的图元数（大于 0 时熔断，后续图元不再尝试）</summary>
+        public int DracoFailedCount { get; set; }
+
+        /// <summary>Draco：因超出安全上限而跳过的图元数</summary>
+        public int DracoSkippedCount { get; set; }
+
+        /// <summary>Draco：成功压缩的图元数</summary>
+        public int DracoPrimitiveCount { get; set; }
+
+        /// <summary>Draco：压缩前几何字节数估算（未压缩写出的理论大小）</summary>
+        public long DracoRawBytes { get; set; }
+
+        /// <summary>Draco：压缩后字节数</summary>
+        public long DracoCompressedBytes { get; set; }
+
+        /// <summary>Draco：任一图元实际压缩成功（决定顶层是否声明扩展）</summary>
+        public bool DracoAnyUsed { get; set; }
+
         /// <summary>实例化统计：共享网格个数</summary>
         public int SharedMeshCount { get; set; }
 

@@ -11,3 +11,7 @@ tools/
 *.fbx
 *.rvt
 *.zip
+
+# Draco 原生构建：源码与构建产物不入库（获取/构建方式见 native/CMakeLists.txt 注释）
+native/draco/
+native/build/

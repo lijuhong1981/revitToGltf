@@ -49,8 +49,9 @@ namespace RevitToGltf.Commands
             bool exportMetadata;
             bool separateTextures;
             bool normalizeTextures;
+            bool dracoEnabled;
             if (!SelectSettings(uiDocument, doc, out scopeIds, out scopeName,
-                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary, out exportMetadata, out separateTextures, out normalizeTextures))
+                out outputDirectory, out fileName, out detailLevel, out triangulateLod, out binary, out exportMetadata, out separateTextures, out normalizeTextures, out dracoEnabled))
                 return Result.Cancelled;
             Directory.CreateDirectory(outputDirectory);
 
@@ -85,15 +86,17 @@ namespace RevitToGltf.Commands
                             writing ? 85 + percent * 15 / 100 : percent * 85 / 100, text),
                         ShouldCancel = () => progress.Cancelled,
                         SeparateTextures = separateTextures,
-                        NormalizeTextures = normalizeTextures
+                        NormalizeTextures = normalizeTextures,
+                        DracoEnabled = dracoEnabled && Native.DracoEncoder.Available
                     };
                     context.Log(string.Empty);
                     context.Log(string.Format("===== 导出 glTF: {0} ({1}) =====", doc.Title, doc.PathName));
                     context.Log(string.Format("范围: {0}", scopeName));
                     context.Log(string.Format("精度: Detail={0}, Tri={1}", detailLevel, TriText(triangulateLod)));
-                    context.Log(string.Format("贴图: {0}, 2的幂归一化: {1}",
+                    context.Log(string.Format("贴图: {0}, 2的幂归一化: {1}, Draco压缩: {2}",
                         separateTextures ? "分离到 textures/" : "内嵌进 bin/glb",
-                        normalizeTextures ? "开" : "关"));
+                        normalizeTextures ? "开" : "关",
+                        context.DracoEnabled ? "开" : (dracoEnabled ? "开(原生dll缺失,已回退关闭)" : "关")));
                     context.Log(string.Format("输出文件: {0}", gltfPath));
                     if (exportMetadata)
                         context.Log(string.Format("输出元数据: {0}", metadataPath));
@@ -165,6 +168,17 @@ namespace RevitToGltf.Commands
                                     context.ExpandedTriangleCount, context.TriangleCount,
                                     (1 - (double)context.TriangleCount / Math.Max(1, context.ExpandedTriangleCount)) * 100);
 
+                            if (context.DracoPrimitiveCount > 0)
+                                summaryLine += string.Format("\nDraco: {0} 图元 {1:0.0}MB → {2:0.0}MB (省 {3:0.0}%)",
+                                    context.DracoPrimitiveCount,
+                                    context.DracoRawBytes / 1048576.0,
+                                    context.DracoCompressedBytes / 1048576.0,
+                                    (1 - (double)context.DracoCompressedBytes / Math.Max(1, context.DracoRawBytes)) * 100);
+                            if (context.DracoSkippedCount > 0)
+                                summaryLine += string.Format("\nDraco: {0} 图元超限未压缩", context.DracoSkippedCount);
+                            if (context.DracoFailedCount > 0)
+                                summaryLine += string.Format("\nDraco: {0} 图元编码失败已回退未压缩", context.DracoFailedCount);
+
                             if (exportMetadata)
                             {
                                 try
@@ -227,7 +241,7 @@ namespace RevitToGltf.Commands
             out ICollection<ElementId> scopeIds, out string scopeName,
             out string outputDirectory, out string fileName,
             out ViewDetailLevel detailLevel, out double? triangulateLod, out bool binary,
-            out bool exportMetadata, out bool separateTextures, out bool normalizeTextures)
+            out bool exportMetadata, out bool separateTextures, out bool normalizeTextures, out bool dracoEnabled)
         {
             scopeIds = null;
             scopeName = null;
@@ -239,6 +253,7 @@ namespace RevitToGltf.Commands
             exportMetadata = false;
             separateTextures = true;
             normalizeTextures = true;
+            dracoEnabled = false;
 
             string projectName = Path.GetFileNameWithoutExtension(doc.PathName);
             if (string.IsNullOrEmpty(projectName)) projectName = doc.Title;
@@ -260,13 +275,14 @@ namespace RevitToGltf.Commands
             bool chosenMeta = saved.ExportMetadata;       // 是否导出元数据 .metadata
             bool chosenSeparateTex = saved.SeparateTextures; // 贴图是否分离到 textures/（默认勾选）
             bool chosenNormalizeTex = saved.NormalizeTextures; // 贴图重采样到最近 2 的幂（默认勾选）
+            bool chosenDraco = saved.DracoEnabled;   // Draco 几何压缩（默认不勾：输出需查看器支持解码）
             bool nameEdited = false;      // 用户手工改过文件名后，滑动条不再自动改写
             bool suppressNameSync = false; // 程序化赋值时抑制 TextChanged 的"已编辑"标记
 
             using (var form = new System.Windows.Forms.Form())
             {
                 form.Text = "导出 glTF 设置";
-                form.ClientSize = new System.Drawing.Size(1100, 708);
+                form.ClientSize = new System.Drawing.Size(1100, 744);
                 form.FormBorderStyle = FormBorderStyle.FixedDialog;
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
@@ -303,11 +319,11 @@ namespace RevitToGltf.Commands
                 Func<string> triSlug = () => chosenTri.HasValue
                     ? chosenTri.Value.ToString("0.00", CultureInfo.InvariantCulture) : "default";
                 Func<string> defaultName = () => projectName + "_" + DetailSlug(chosenDetail) + "_" + triSlug();
-                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 568, Width = 160 };
+                var nameLabel = new Label { Text = "文件名:", Left = 12, Top = 604, Width = 160 };
                 var nameBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 596,
+                    Top = 632,
                     Width = 920,
                     Height = 32,
                     Text = defaultName()
@@ -396,17 +412,17 @@ namespace RevitToGltf.Commands
                 };
 
                 // ---- 输出目录 ----
-                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 494, Width = 160 };
+                var dirLabel = new Label { Text = "输出目录:", Left = 12, Top = 530, Width = 160 };
                 var dirBox = new System.Windows.Forms.TextBox
                 {
                     Left = 12,
-                    Top = 522,
+                    Top = 558,
                     Width = 920,
                     Height = 32,
                     Text = chosenDir,
                     ReadOnly = true
                 };
-                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 520, Width = 140, Height = 38 };
+                var browseButton = new Button { Text = "浏览...", Left = 948, Top = 556, Width = 140, Height = 38 };
                 browseButton.Click += (s, e) =>
                 {
                     using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
@@ -473,24 +489,36 @@ namespace RevitToGltf.Commands
                 };
                 normalizeTexCheck.CheckedChanged += (s, e) => { chosenNormalizeTex = normalizeTexCheck.Checked; };
 
+                // Draco 几何压缩：独立一行，输出标记 extensionsRequired，需查看器支持解码（Cesium 内置）
+                var dracoCheck = new CheckBox
+                {
+                    Text = "Draco 几何压缩（体积 -80% 左右，需查看器支持解码）",
+                    Left = 12,
+                    Top = 460,
+                    AutoSize = true,
+                    Checked = chosenDraco,
+                    BackColor = System.Drawing.Color.Transparent
+                };
+                dracoCheck.CheckedChanged += (s, e) => { chosenDraco = dracoCheck.Checked; };
+
                 // 导出元数据：独立一行（不放同一 FlowLayoutPanel，避免与格式单选同行）
                 var exportMetaCheck = new CheckBox
                 {
                     Text = "导出元数据（同名 .metadata）",
                     Left = 12,
-                    Top = 460,
+                    Top = 496,
                     AutoSize = true,
                     Checked = chosenMeta,
                     BackColor = System.Drawing.Color.Transparent
                 };
                 exportMetaCheck.CheckedChanged += (s, e) => { chosenMeta = exportMetaCheck.Checked; };
 
-                var okButton = new Button { Text = "导出", Left = 828, Top = 640, Width = 120, Height = 42 };
+                var okButton = new Button { Text = "导出", Left = 828, Top = 676, Width = 120, Height = 42 };
                 var cancelButton = new Button
                 {
                     Text = "取消",
                     Left = 960,
-                    Top = 640,
+                    Top = 676,
                     Width = 120,
                     Height = 42,
                     DialogResult = DialogResult.Cancel
@@ -542,7 +570,8 @@ namespace RevitToGltf.Commands
                         Binary = chosenBinary,
                         ExportMetadata = chosenMeta,
                         SeparateTextures = chosenSeparateTex,
-                        NormalizeTextures = chosenNormalizeTex
+                        NormalizeTextures = chosenNormalizeTex,
+                        DracoEnabled = chosenDraco
                     });
                     form.DialogResult = DialogResult.OK;
                     form.Close();
@@ -559,6 +588,7 @@ namespace RevitToGltf.Commands
                 form.Controls.Add(exportMetaCheck);
                 form.Controls.Add(separateTexCheck);
                 form.Controls.Add(normalizeTexCheck);
+                form.Controls.Add(dracoCheck);
                 form.Controls.Add(detailLabel);
                 form.Controls.Add(radioCoarse);
                 form.Controls.Add(radioMedium);
@@ -606,6 +636,7 @@ namespace RevitToGltf.Commands
             exportMetadata = chosenMeta;
             separateTextures = chosenSeparateTex;
             normalizeTextures = chosenNormalizeTex;
+            dracoEnabled = chosenDraco;
             return true;
         }
 

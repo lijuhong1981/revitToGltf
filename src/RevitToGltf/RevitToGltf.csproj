@@ -63,6 +63,7 @@
     <Compile Include="Extraction\TextureExtractor.cs" />
     <Compile Include="Models\ElementMetadata.cs" />
     <Compile Include="Models\RevitMeshData.cs" />
+    <Compile Include="Native\DracoEncoder.cs" />
     <Compile Include="Output\GltfWriter.cs" />
     <Compile Include="Output\MetadataWriter.cs" />
     <Compile Include="Pipeline\GltfExportContext.cs" />
